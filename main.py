@@ -145,6 +145,13 @@ class OldTV:
             self.is_pi = self.is_raspberry_pi()
             self.undervoltage_warning = False
             self.pi_voltage = "Unavailable"
+
+            self.tts_queue = queue.Queue()
+            self.tts_thread = threading.Thread(target=self.tts_worker, daemon=True)
+            self.tts_thread.start()
+
+            self.action_queue = queue.Queue()  # <-- Add this line
+            self.handling_question = False
         except Exception as e:
             print(f"Error in __init__: {e}")
 
@@ -156,7 +163,7 @@ class OldTV:
                 and self.wake_word_thread.is_alive()
                 and threading.current_thread() != self.wake_word_thread
             ):
-                self.wake_word_thread.join(timeout=2)
+                self.wake_word_thread.join(timeout=1)
             self.wake_word_thread = None
         except Exception as e:
             self.logger.error(f"Error in stop_wake_word_listener: {e}")
@@ -235,31 +242,106 @@ class OldTV:
                 self.logger.info("No valid text to play")
                 return False
             try:
-                self.stop_wake_word_listener()
                 self.next_phrase = text
                 pygame.event.pump()
-                def speech_thread():
-                    try:
-                        self.logger.info(f"Playing TTS: {text}")
-                        if self.engine.isBusy():
-                            self.engine.stop()
-                        self.engine.say(text, "Message Playback")
-                        self.engine.runAndWait()
-                        self.logger.info("TTS playback completed")
-                    except Exception as e:
-                        self.logger.info(f"Error in TTS playback: {e}")
-                    finally:
-                        self.run_wake_word_listener()
-                thread = threading.Thread(target=speech_thread)
-                thread.start()
-                # Do NOT join here; let the thread run in the background
+                self.logger.info(f"Queueing TTS: {text}")
+                self.tts_queue.put(text)
                 return True
             except Exception as e:
                 self.logger.info(f"Error in play_message: {e}")
-                self.run_wake_word_listener()
                 return False
         except Exception as e:
             self.logger.error(f"Error in play_message (outer): {e}")
+
+    def start_wake_word_listener(self):
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            model_path = os.path.join(script_dir, "models/vosk-model-small-en-us-0.15")
+            if not os.path.exists(model_path):
+                raise RuntimeError(f"Vosk model not found at {model_path}.  Current path: {os.getcwd()}")
+            model = vosk.Model(model_path)
+            recognizer = vosk.KaldiRecognizer(model, 16000)
+            wake_words = ["hey tv", "computer", "stop"]
+
+            q = queue.Queue()
+
+            def audio_callback(indata, frames, time, status):
+                if status:
+                    self.logger.info(status)
+                q.put(bytes(indata))
+
+            while not self.wake_word_stop_event.is_set():
+                self.listening_state = "wake_word"
+                with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype='int16',
+                                       channels=1, callback=audio_callback):
+                    self.logger.info("Listening for wake word ('hey tv', 'computer', or 'stop')...")
+                    while not self.wake_word_stop_event.is_set():
+                        data = q.get()
+                        if recognizer.AcceptWaveform(data):
+                            result = recognizer.Result()
+                            import json
+                            text = json.loads(result).get("text", "").lower()
+                            self.logger.info(f"Recognized: {text}")
+                            if "stop" in text:
+                                self.logger.info("Wake word 'stop' detected!")
+                                if self.engine.isBusy():
+                                    self.logger.info("TTS engine is busy. Stopping TTS.")
+                                    self.engine.stop()
+                                continue
+                            if any(word in text for word in ["hey tv", "computer"]):
+                                self.logger.info("Wake word detected!")
+                                break
+                if not self.wake_word_stop_event.is_set():
+                    self.action_queue.put("question")  # <-- Queue the action for main thread
+                self.listening_state = None
+        except Exception as e:
+            self.logger.error(f"Error in start_wake_word_listener: {e}")
+
+    def handle_question(self):
+        try:
+            recognizer = sr.Recognizer()
+            mic = sr.Microphone()
+            with mic as source:
+                recognizer.adjust_for_ambient_noise(source)
+                try:
+                    self.beep(880, 120)
+                    self.logger.info("Ask your question...")
+                    self.listening_state = "question"
+                    audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
+                except sr.WaitTimeoutError:
+                    self.logger.info("No speech detected. Please try again.")
+                    return
+            try:
+                question = recognizer.recognize_google(audio)
+                self.logger.info(f"Recognized question: {question}")
+            except Exception as e:
+                self.logger.info(f"Could not recognize question: {e}")
+                return
+
+            try:
+                response = self.ai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    store=True,
+                    messages=[
+                        {"role": "system", "content": "When you write equations, use words for operators, e.g., 'times' instead of '*', 'divided by' instead of '/', etc."},
+                        {"role": "user", "content": question}
+                    ]
+                )
+                answer = response.choices[0].message.content.strip()
+                self.logger.info(f"Answer: {answer}")
+            except Exception as e:
+                answer = "Sorry, I could not get an answer."
+                self.logger.info(f"OpenAI error: {e}")
+
+            self.tts_queue.put(answer)
+        except Exception as e:
+            self.logger.error(f"Error in handle_question: {e}")
+
+    def handle_question_threadsafe(self):
+        try:
+            self.handle_question()
+        finally:
+            self.handling_question = False
 
     def get_syllable_count(self, word: str) -> int:
         try:
@@ -427,49 +509,6 @@ class OldTV:
         except Exception as e:
             self.logger.info(f"Beep error: {e}")
 
-    def start_wake_word_listener(self):
-        try:
-            model_path = "models/vosk-model-small-en-us-0.15"
-            if not os.path.exists(model_path):
-                raise RuntimeError(f"Vosk model not found at {model_path}.  Current path: {os.getcwd()}")
-            model = vosk.Model(model_path)
-            recognizer = vosk.KaldiRecognizer(model, 16000)
-            wake_words = ["hey tv", "computer", "stop"]
-
-            q = queue.Queue()
-
-            def audio_callback(indata, frames, time, status):
-                if status:
-                    self.logger.info(status)
-                q.put(bytes(indata))
-
-            while not self.wake_word_stop_event.is_set():
-                self.listening_state = "wake_word"
-                with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype='int16',
-                                       channels=1, callback=audio_callback):
-                    self.logger.info("Listening for wake word ('hey tv', 'computer', or 'stop')...")
-                    while not self.wake_word_stop_event.is_set():
-                        data = q.get()
-                        if recognizer.AcceptWaveform(data):
-                            result = recognizer.Result()
-                            import json
-                            text = json.loads(result).get("text", "").lower()
-                            self.logger.info(f"Recognized: {text}")
-                            if "stop" in text:
-                                self.logger.info("Wake word 'stop' detected!")
-                                if self.engine.isBusy():
-                                    self.logger.info("TTS engine is busy. Stopping TTS.")
-                                    self.engine.stop()
-                                continue
-                            if any(word in text for word in ["hey tv", "computer"]):
-                                self.logger.info("Wake word detected!")
-                                break
-                if not self.wake_word_stop_event.is_set():
-                    self.handle_question()
-                self.listening_state = None
-        except Exception as e:
-            self.logger.error(f"Error in start_wake_word_listener: {e}")
-
     def preprocess_for_tts(self, text):
         try:
             replacements = {
@@ -489,7 +528,6 @@ class OldTV:
 
     def handle_question(self):
         try:
-            self.stop_wake_word_listener()
             recognizer = sr.Recognizer()
             mic = sr.Microphone()
             with mic as source:
@@ -501,14 +539,12 @@ class OldTV:
                     audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
                 except sr.WaitTimeoutError:
                     self.logger.info("No speech detected. Please try again.")
-                    self.run_wake_word_listener()
                     return
             try:
                 question = recognizer.recognize_google(audio)
                 self.logger.info(f"Recognized question: {question}")
             except Exception as e:
                 self.logger.info(f"Could not recognize question: {e}")
-                self.run_wake_word_listener()
                 return
 
             try:
@@ -526,11 +562,7 @@ class OldTV:
                 answer = "Sorry, I could not get an answer."
                 self.logger.info(f"OpenAI error: {e}")
 
-            if self.engine.isBusy():
-                self.engine.stop()
-            self.engine.say(answer, "Question Answer")
-            self.engine.runAndWait()
-            self.run_wake_word_listener()
+            self.tts_queue.put(answer)
         except Exception as e:
             self.logger.error(f"Error in handle_question: {e}")
 
@@ -732,6 +764,31 @@ class OldTV:
         except Exception as e:
             self.logger.info(f"Error drawing Pi status: {e}")
 
+    def tts_worker(self):
+        while True:
+            text = self.tts_queue.get()
+            if text is None:
+                break  # Allows for clean shutdown if needed
+            try:
+                self.logger.info(f"TTS Worker: Speaking: {text}")
+                if self.engine.isBusy():
+                    self.engine.stop()
+                self.engine.say(text, "Message Playback")
+                self.engine.runAndWait()
+                self.logger.info("TTS Worker: Done speaking")
+            except Exception as e:
+                self.logger.info(f"TTS Worker error: {e}")
+            finally:
+                self.run_wake_word_listener()  # <-- Only here for TTS!
+
+    def shutdown(self):
+        try:
+            self.logger.info("Shutting down TTS worker...")
+            self.tts_queue.put(None)
+            self.tts_thread.join(timeout=1)
+        except Exception as e:
+            self.logger.info(f"Error during shutdown: {e}")
+
     def main(self):
         try:
             self.run_wake_word_listener()
@@ -741,10 +798,20 @@ class OldTV:
             recording_thread = None
             last_transcribed_text = ""
             display_save_prompt = False
-            self.engine.runAndWait()
+            # Welcome message queued to TTS queue
+            self.tts_queue.put("Welcome")
             pi_status_counter = 0  # For periodic update
             while running:
                 try:
+                    # --- Process queued actions from other threads (like wake word) ---
+                    while not self.action_queue.empty():
+                        action = self.action_queue.get()
+                        if action == "question":
+                            if not self.handling_question:
+                                self.handling_question = True
+                                self.stop_wake_word_listener()
+                                threading.Thread(target=self.handle_question_threadsafe, daemon=True).start()
+
                     for event in pygame.event.get():
                         # SETTINGS MENU TOGGLE (Ctrl+S)
                         if event.type == pygame.KEYDOWN and (event.key == pygame.K_s and (event.mod & pygame.KMOD_CTRL)):
@@ -774,7 +841,6 @@ class OldTV:
                                     recording_thread = threading.Thread(target=self.record_audio)
                                     recording_thread.start()
                                     self.logger.info("Started recording")
-                                    # Do NOT restart wake word here
                                 elif event.key not in [pygame.K_LSHIFT, pygame.K_RSHIFT]:
                                     key_name = pygame.key.name(event.key)
                                     # Prevent saving to Ctrl key
@@ -803,26 +869,22 @@ class OldTV:
                                     recording_thread = threading.Thread(target=self.record_audio)
                                     recording_thread.start()
                                     self.logger.info("Started recording")
-                                    # Do NOT restart wake word here
                                 elif event.key not in [pygame.K_LSHIFT, pygame.K_RSHIFT, pygame.K_ESCAPE, pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT]:
                                     key_name = pygame.key.name(event.key)
                                     if key_name in self.recordings:
-                                        self.stop_wake_word_listener()
                                         self.logger.info(f"Playing '{key_name}': {self.recordings[key_name]}")
                                         self.play_message(self.recordings[key_name])
-                                        self.run_wake_word_listener()
                                 elif event.key == pygame.K_ESCAPE:
                                     self.logger.info("Exiting...")
                                     running = False
-                                    self.stop_wake_word_listener()
+                                    # Do not stop wake word listener here
                         elif event.type == pygame.KEYUP:
                             self.logger.info(f"KEYUP: key={event.key}, mod={event.mod}")
                             if event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT] and self.recording:
                                 self.recording = False
                                 if recording_thread:
-                                    recording_thread.join(timeout=2)  # Prevent lockup
+                                    recording_thread.join(timeout=1)
                                 self.beep(440, 120)
-                                # Do NOT stop wake word here, already stopped
                                 text = self.speech_to_text()
                                 if text:
                                     self.logger.info(f"Recorded: {text}")
@@ -834,7 +896,7 @@ class OldTV:
                                     self.awaiting_save = False
                                     display_save_prompt = False
                                 recording_thread = None
-                                self.run_wake_word_listener()
+                                self.run_wake_word_listener()  # <-- Only here for recording!
 
                     # Periodically update Pi power status (every 1 second)
                     if self.is_pi:
@@ -856,7 +918,7 @@ class OldTV:
                         self.draw_interference()
                         self.draw_listening_indicator()
                         self.draw_debug_logs()
-                        self.draw_pi_status()  # <-- Add this line
+                        self.draw_pi_status()
 
                         if display_save_prompt and last_transcribed_text:
                             prompt_font = pygame.font.Font(None, 36)
@@ -890,6 +952,7 @@ class OldTV:
                     self.logger.error(f"Unexpected error: {e}")
 
             self.save_recordings()
+            self.shutdown()
             pygame.quit()
             sys.exit()
         except Exception as e:
