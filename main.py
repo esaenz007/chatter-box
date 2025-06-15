@@ -243,10 +243,11 @@ class OldTV:
                         self.logger.info("TTS playback completed")
                     except Exception as e:
                         self.logger.info(f"Error in TTS playback: {e}")
+                    finally:
+                        self.run_wake_word_listener()
                 thread = threading.Thread(target=speech_thread)
                 thread.start()
-                thread.join()
-                self.run_wake_word_listener()
+                # Do NOT join here; let the thread run in the background
                 return True
             except Exception as e:
                 self.logger.info(f"Error in play_message: {e}")
