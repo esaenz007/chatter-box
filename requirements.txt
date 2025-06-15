@@ -1,0 +1,11 @@
+pygame
+pyttsx3
+pronouncing
+speechrecognition
+sounddevice
+numpy
+scipy
+pvporcupine
+pyaudio
+openai
+vosk
