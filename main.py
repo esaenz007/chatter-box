@@ -425,7 +425,7 @@ class OldTV:
         try:
             model_path = "models/vosk-model-small-en-us-0.15"
             if not os.path.exists(model_path):
-                raise RuntimeError(f"Vosk model not found at {model_path}")
+                raise RuntimeError(f"Vosk model not found at {model_path}.  Current path: {os.getcwd()}")
             model = vosk.Model(model_path)
             recognizer = vosk.KaldiRecognizer(model, 16000)
             wake_words = ["hey tv", "computer", "stop"]
