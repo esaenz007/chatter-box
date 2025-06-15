@@ -720,7 +720,8 @@ class OldTV:
 
     def draw_pi_status(self):
         try:
-            if self.is_pi:
+            # Only show if in debug mode or currently under voltage
+            if self.is_pi and (self.debug_mode or self.undervoltage_warning):
                 font = pygame.font.Font(None, 24)
                 y = self.SCREEN_HEIGHT - 60
                 volt_text = font.render(f"Pi Voltage: {self.pi_voltage}", True, (255, 255, 0))
