@@ -15,6 +15,7 @@ import openai
 import vosk
 import math
 import logging
+import subprocess
 from collections import deque
 
 class OldTV:
@@ -140,6 +141,10 @@ class OldTV:
             self.listening_state = "wake_word"
             openai_key = os.environ.get("OPENAI_API_KEY")
             self.ai_client = openai.OpenAI(api_key=openai_key)
+
+            self.is_pi = self.is_raspberry_pi()
+            self.undervoltage_warning = False
+            self.pi_voltage = "Unavailable"
         except Exception as e:
             print(f"Error in __init__: {e}")
 
@@ -695,6 +700,37 @@ class OldTV:
         except Exception as e:
             self.logger.info(f"Error in handle_settings_event: {e}")
 
+    def is_raspberry_pi(self):
+        try:
+            with open("/proc/device-tree/model") as f:
+                return "Raspberry Pi" in f.read()
+        except Exception:
+            return False
+
+    def get_pi_power_status(self):
+        try:
+            # Check for undervoltage
+            throttled = subprocess.check_output(['vcgencmd', 'get_throttled']).decode()
+            undervoltage = "0x1" in throttled or "0x50000" in throttled
+            # Get voltage
+            volts = subprocess.check_output(['vcgencmd', 'measure_volts']).decode().strip()
+            return undervoltage, volts
+        except Exception:
+            return False, "Unavailable"
+
+    def draw_pi_status(self):
+        try:
+            if self.is_pi:
+                font = pygame.font.Font(None, 24)
+                y = self.SCREEN_HEIGHT - 60
+                volt_text = font.render(f"Pi Voltage: {self.pi_voltage}", True, (255, 255, 0))
+                self.screen.blit(volt_text, (10, y))
+                if self.undervoltage_warning:
+                    warn_text = font.render("!!! UNDERVOLTAGE DETECTED !!!", True, (255, 0, 0))
+                    self.screen.blit(warn_text, (10, y + 30))
+        except Exception as e:
+            self.logger.info(f"Error drawing Pi status: {e}")
+
     def main(self):
         try:
             self.run_wake_word_listener()
@@ -705,6 +741,7 @@ class OldTV:
             last_transcribed_text = ""
             display_save_prompt = False
             self.engine.runAndWait()
+            pi_status_counter = 0  # For periodic update
             while running:
                 try:
                     for event in pygame.event.get():
@@ -798,6 +835,13 @@ class OldTV:
                                 recording_thread = None
                                 self.run_wake_word_listener()
 
+                    # Periodically update Pi power status (every 1 second)
+                    if self.is_pi:
+                        pi_status_counter += 1
+                        if pi_status_counter >= 20:  # 20 frames at 20 FPS = 1 second
+                            self.undervoltage_warning, self.pi_voltage = self.get_pi_power_status()
+                            pi_status_counter = 0
+
                     if self.show_settings:
                         self.draw_settings_menu()
                     else:
@@ -811,6 +855,7 @@ class OldTV:
                         self.draw_interference()
                         self.draw_listening_indicator()
                         self.draw_debug_logs()
+                        self.draw_pi_status()  # <-- Add this line
 
                         if display_save_prompt and last_transcribed_text:
                             prompt_font = pygame.font.Font(None, 36)
