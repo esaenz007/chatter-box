@@ -156,6 +156,7 @@ class OldTV:
             print(f"Error in __init__: {e}")
 
     def stop_wake_word_listener(self):
+        self.logger.info("Entered stop_wake_word_listener")
         try:
             self.wake_word_stop_event.set()
             if (
@@ -169,6 +170,7 @@ class OldTV:
             self.logger.error(f"Error in stop_wake_word_listener: {e}")
 
     def run_wake_word_listener(self):
+        self.logger.info("Entered run_wake_word_listener")
         try:
             self.wake_word_stop_event.clear()
             self.wake_word_thread = threading.Thread(target=self.start_wake_word_listener, daemon=True)
@@ -177,6 +179,7 @@ class OldTV:
             self.logger.error(f"Error in run_wake_word_listener: {e}")
 
     def record_audio(self):
+        self.logger.info("Entered record_audio")
         try:
             self.audio_data = []
             stream = None
@@ -206,6 +209,7 @@ class OldTV:
             self.logger.error(f"Error in record_audio: {e}")
 
     def speech_to_text(self):
+        self.logger.info("Entered speech_to_text")
         try:
             try:
                 if not os.path.exists("temp.wav"):
@@ -237,11 +241,13 @@ class OldTV:
             self.logger.error(f"Error in speech_to_text: {e}")
 
     def play_message(self, text):
+        self.logger.info("Entered play_message")
         try:
             if not text:
                 self.logger.info("No valid text to play")
                 return False
             try:
+                self.stop_wake_word_listener()
                 self.next_phrase = text
                 pygame.event.pump()
                 self.logger.info(f"Queueing TTS: {text}")
@@ -254,6 +260,7 @@ class OldTV:
             self.logger.error(f"Error in play_message (outer): {e}")
 
     def start_wake_word_listener(self):
+        self.logger.info("Entered start_wake_word_listener")
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             model_path = os.path.join(script_dir, "models/vosk-model-small-en-us-0.15")
@@ -296,275 +303,6 @@ class OldTV:
                 self.listening_state = None
         except Exception as e:
             self.logger.error(f"Error in start_wake_word_listener: {e}")
-
-    def handle_question(self):
-        try:
-            recognizer = sr.Recognizer()
-            mic = sr.Microphone()
-            with mic as source:
-                recognizer.adjust_for_ambient_noise(source)
-                try:
-                    self.beep(880, 120)
-                    self.logger.info("Ask your question...")
-                    self.listening_state = "question"
-                    audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
-                except sr.WaitTimeoutError:
-                    self.logger.info("No speech detected. Please try again.")
-                    return
-            try:
-                question = recognizer.recognize_google(audio)
-                self.logger.info(f"Recognized question: {question}")
-            except Exception as e:
-                self.logger.info(f"Could not recognize question: {e}")
-                return
-
-            try:
-                response = self.ai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    store=True,
-                    messages=[
-                        {"role": "system", "content": "When you write equations, use words for operators, e.g., 'times' instead of '*', 'divided by' instead of '/', etc."},
-                        {"role": "user", "content": question}
-                    ]
-                )
-                answer = response.choices[0].message.content.strip()
-                self.logger.info(f"Answer: {answer}")
-            except Exception as e:
-                answer = "Sorry, I could not get an answer."
-                self.logger.info(f"OpenAI error: {e}")
-
-            self.tts_queue.put(answer)
-        except Exception as e:
-            self.logger.error(f"Error in handle_question: {e}")
-
-    def handle_question_threadsafe(self):
-        try:
-            self.handle_question()
-        finally:
-            self.handling_question = False
-
-    def get_syllable_count(self, word: str) -> int:
-        try:
-            phones = pronouncing.phones_for_word(word.lower().strip(".,!?;:"))
-            if not phones:
-                return self.fallback_syllable_count(word)
-            syllable_count = pronouncing.syllable_count(phones[0])
-        except Exception as e:
-            self.logger.info(f"Error counting syllables for '{word}': {e}")
-            syllable_count = self.fallback_syllable_count(word)
-        return syllable_count if syllable_count > 0 else 1
-
-    def fallback_syllable_count(self, word: str) -> int:
-        try:
-            w = word.lower().rstrip(".,!?;:")
-            if w.endswith("e"):
-                w = w[:-1]
-            count = 0
-            prev_is_vowel = False
-            vset = self._VOWELS
-            for ch in w:
-                is_vowel = ch in vset
-                if is_vowel and not prev_is_vowel:
-                    count += 1
-                prev_is_vowel = is_vowel
-            return count or 1
-        except Exception as e:
-            self.logger.info(f"Error in fallback_syllable_count: {e}")
-            return 1
-
-    def on_start_word(self, name, location, length):
-        try:
-            self.logger.info(f"Started word: {name}, Location: {location}, Length: {length}")
-            self.is_talking = True
-            if self.interrupt_tts:
-                self.logger.info("Interrupting TTS playback")
-                self.engine.stop()
-                self.interrupt_tts = False
-                self.is_talking = False
-        except Exception as e:
-            self.logger.info(f"Error in on_start_word: {e}")
-
-    def on_start(self, name):
-        try:
-            self.logger.info(f"Started speaking: {name}")
-            self.is_talking = True
-        except Exception as e:
-            self.logger.info(f"Error in on_start: {e}")
-
-    def on_end(self, name, completed):
-        try:
-            self.logger.info(f"Finished speaking: {name}, Completed: {completed}")
-            self.is_talking = False
-        except Exception as e:
-            self.logger.info(f"Error in on_end: {e}")
-        
-    def on_error(self, name, error):
-        try:
-            self.logger.info(f"Error in TTS: {name}, Error: {error}")
-            self.is_talking = False
-        except Exception as e:
-            self.logger.info(f"Error in on_error: {e}")
-
-    def draw_background(self):
-        try:
-            noise_speed = 5.0  # 1.0 = normal, <1.0 = slower, >1.0 = faster
-            t = pygame.time.get_ticks() / 1000.0  # seconds
-            frame = int(t * noise_speed)
-            random.seed(frame)
-            self.screen.fill((0, 40, 0))  # Dark CRT green
-            for _ in range(self.NOISE_DOTS):
-                x = random.randint(0, self.SCREEN_WIDTH)
-                y = random.randint(0, self.SCREEN_HEIGHT)
-                color = (0, random.randint(100, 255), 0)
-                self.screen.set_at((x, y), color)
-        except Exception as e:
-            self.logger.info(f"Error drawing background: {e}")
-
-    def draw_face(self, mouth=")"):
-        try:
-            wpm = 120  # Animation speed: words per minute
-            wps = wpm / 60.0
-            cycle_duration = 1.0 / wps  # seconds per word (open+close)
-            half_cycle = cycle_duration / 2
-
-            if self.is_talking:
-                t = pygame.time.get_ticks() / 1000.0  # seconds
-                phase = int((t % cycle_duration) // half_cycle)
-                mouth_anim = self.FACE_NORMAL if phase == 0 else self.FACE_WAIT
-            else:
-                mouth_anim = self.FACE_IDLE
-
-            eyes_surface = self.font.render(":", True, (0, 255, 0))
-            mouth_surface = self.font.render(mouth_anim, True, (0, 255, 0))
-            eyes_x = self.SCREEN_WIDTH // 2 - eyes_surface.get_width() - 20
-            eyes_y = self.SCREEN_HEIGHT // 2 - eyes_surface.get_height() // 2
-            mouth_x = eyes_x + eyes_surface.get_width() + 5
-            mouth_y = eyes_y
-            self.screen.blit(eyes_surface, (eyes_x, eyes_y))
-            self.screen.blit(mouth_surface, (mouth_x, mouth_y))
-        except Exception as e:
-            self.logger.info(f"Error drawing face: {e}")
-
-    def draw_interference(self):
-        try:
-            interference_speed = 5.0  # 1.0 = normal, <1.0 = slower, >1.0 = faster
-            t = pygame.time.get_ticks() / 1000.0  # seconds
-            frame = int(t * interference_speed)
-            random.seed(1000 + frame)
-            self.interference_surface.fill((0, 0, 0, 0))
-            for _ in range(random.randint(1, 3)):
-                y = random.randint(0, self.SCREEN_HEIGHT)
-                height = random.randint(1, 3)
-                alpha = random.randint(30, 100)
-                color = (0, 255, 0, alpha)
-                pygame.draw.rect(self.interference_surface, color, (0, y, self.SCREEN_WIDTH, height))
-            self.screen.blit(self.interference_surface, (0, 0))
-        except Exception as e:
-            self.logger.info(f"Error drawing interference: {e}")
-
-    def load_recordings(self):
-        try:
-            if os.path.exists(self.SAVE_FILE):
-                try:
-                    with open(self.SAVE_FILE, "r") as f:
-                        self.recordings = json.load(f)
-                    self.logger.info(f"Loaded recordings from {self.SAVE_FILE}")
-                except Exception as e:
-                    self.logger.info(f"Error loading recordings: {e}")
-                    self.recordings = {}
-            else:
-                self.recordings = {}
-        except Exception as e:
-            self.logger.info(f"Error in load_recordings: {e}")
-
-    def save_recordings(self):
-        try:
-            with open(self.SAVE_FILE, "w") as f:
-                json.dump(self.recordings, f)
-            self.logger.info(f"Saved recordings to {self.SAVE_FILE}")
-        except Exception as e:
-            self.logger.info(f"Error saving recordings: {e}")
-
-    def beep(self, freq=440, duration=180, volume=0.3):
-        try:
-            pygame.mixer.init(frequency=22050, size=-16)
-            sample_rate = 22050
-            n_samples = int(round(duration * sample_rate / 1000))
-            buf = (volume * 32767 * np.sin(2.0 * np.pi * np.arange(n_samples) * freq / sample_rate)).astype(np.int16)
-            mixer_channels = pygame.mixer.get_init()[2]
-            if mixer_channels == 1:
-                if buf.ndim == 1:
-                    arr = buf
-                else:
-                    arr = buf.reshape(-1)
-            elif mixer_channels == 2:
-                arr = np.repeat(buf[:, np.newaxis], 2, axis=1)
-            else:
-                raise ValueError(f"Unsupported mixer channels: {mixer_channels}")
-            sound = pygame.sndarray.make_sound(arr)
-            sound.play()
-            pygame.time.delay(duration)
-            sound.stop()
-            pygame.mixer.quit()
-        except Exception as e:
-            self.logger.info(f"Beep error: {e}")
-
-    def preprocess_for_tts(self, text):
-        try:
-            replacements = {
-                '*': ' times ',
-                '/': ' divided by ',
-                '+': ' plus ',
-                '-': ' minus ',
-                '=': ' equals ',
-                '^': ' to the power of ',
-            }
-            for symbol, word in replacements.items():
-                text = text.replace(symbol, word)
-            return text
-        except Exception as e:
-            self.logger.info(f"Error in preprocess_for_tts: {e}")
-            return text
-
-    def handle_question(self):
-        try:
-            recognizer = sr.Recognizer()
-            mic = sr.Microphone()
-            with mic as source:
-                recognizer.adjust_for_ambient_noise(source)
-                try:
-                    self.beep(880, 120)
-                    self.logger.info("Ask your question...")
-                    self.listening_state = "question"
-                    audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
-                except sr.WaitTimeoutError:
-                    self.logger.info("No speech detected. Please try again.")
-                    return
-            try:
-                question = recognizer.recognize_google(audio)
-                self.logger.info(f"Recognized question: {question}")
-            except Exception as e:
-                self.logger.info(f"Could not recognize question: {e}")
-                return
-
-            try:
-                response = self.ai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    store=True,
-                    messages=[
-                        {"role": "system", "content": "When you write equations, use words for operators, e.g., 'times' instead of '*', 'divided by' instead of '/', etc."},
-                        {"role": "user", "content": question}
-                    ]
-                )
-                answer = response.choices[0].message.content.strip()
-                self.logger.info(f"Answer: {answer}")
-            except Exception as e:
-                answer = "Sorry, I could not get an answer."
-                self.logger.info(f"OpenAI error: {e}")
-
-            self.tts_queue.put(answer)
-        except Exception as e:
-            self.logger.error(f"Error in handle_question: {e}")
 
     def draw_listening_indicator(self):
         try:
@@ -685,6 +423,7 @@ class OldTV:
             self.logger.info(f"Error drawing settings menu: {e}")
 
     def handle_settings_event(self, event):
+        self.logger.info("Entered handle_settings_event")
         try:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
@@ -732,7 +471,227 @@ class OldTV:
         except Exception as e:
             self.logger.info(f"Error in handle_settings_event: {e}")
 
+    def handle_question_threadsafe(self):
+        self.logger.info("Entered handle_question_threadsafe")
+        try:
+            self.handle_question()
+        finally:
+            self.handling_question = False
+
+    def get_syllable_count(self, word: str) -> int:
+        self.logger.info(f"Entered get_syllable_count with word: {word}")
+        try:
+            phones = pronouncing.phones_for_word(word.lower().strip(".,!?;:"))
+            if not phones:
+                return self.fallback_syllable_count(word)
+            syllable_count = pronouncing.syllable_count(phones[0])
+        except Exception as e:
+            self.logger.info(f"Error counting syllables for '{word}': {e}")
+            syllable_count = self.fallback_syllable_count(word)
+        return syllable_count if syllable_count > 0 else 1
+
+    def fallback_syllable_count(self, word: str) -> int:
+        self.logger.info(f"Entered fallback_syllable_count with word: {word}")
+        try:
+            w = word.lower().rstrip(".,!?;:")
+            if w.endswith("e"):
+                w = w[:-1]
+            count = 0
+            prev_is_vowel = False
+            vset = self._VOWELS
+            for ch in w:
+                is_vowel = ch in vset
+                if is_vowel and not prev_is_vowel:
+                    count += 1
+                prev_is_vowel = is_vowel
+            return count or 1
+        except Exception as e:
+            self.logger.info(f"Error in fallback_syllable_count: {e}")
+            return 1
+
+    def on_start_word(self, name, location, length):
+        try:
+            self.logger.info(f"Started word: {name}, Location: {location}, Length: {length}")
+            self.is_talking = True
+            if self.interrupt_tts:
+                self.logger.info("Interrupting TTS playback")
+                self.engine.stop()
+                self.interrupt_tts = False
+                self.is_talking = False
+        except Exception as e:
+            self.logger.info(f"Error in on_start_word: {e}")
+
+    def on_start(self, name):
+        try:
+            self.logger.info(f"Started speaking: {name}")
+            self.is_talking = True
+        except Exception as e:
+            self.logger.info(f"Error in on_start: {e}")
+
+    def on_end(self, name, completed):
+        try:
+            self.logger.info(f"Finished speaking: {name}, Completed: {completed}")
+            self.is_talking = False
+        except Exception as e:
+            self.logger.info(f"Error in on_end: {e}")
+        
+    def on_error(self, name, error):
+        try:
+            self.logger.info(f"Error in TTS: {name}, Error: {error}")
+            self.is_talking = False
+        except Exception as e:
+            self.logger.info(f"Error in on_error: {e}")
+
+    def draw_background(self):
+        try:
+            noise_speed = 5.0  # 1.0 = normal, <1.0 = slower, >1.0 = faster
+            t = pygame.time.get_ticks() / 1000.0  # seconds
+            frame = int(t * noise_speed)
+            random.seed(frame)
+            self.screen.fill((0, 40, 0))  # Dark CRT green
+            for _ in range(self.NOISE_DOTS):
+                x = random.randint(0, self.SCREEN_WIDTH)
+                y = random.randint(0, self.SCREEN_HEIGHT)
+                color = (0, random.randint(100, 255), 0)
+                self.screen.set_at((x, y), color)
+        except Exception as e:
+            self.logger.info(f"Error drawing background: {e}")
+
+    def draw_face(self, mouth=")"):
+        try:
+            wpm = 120  # Animation speed: words per minute
+            wps = wpm / 60.0
+            cycle_duration = 1.0 / wps  # seconds per word (open+close)
+            half_cycle = cycle_duration / 2
+
+            if self.is_talking:
+                t = pygame.time.get_ticks() / 1000.0  # seconds
+                phase = int((t % cycle_duration) // half_cycle)
+                mouth_anim = self.FACE_NORMAL if phase == 0 else self.FACE_WAIT
+            else:
+                mouth_anim = self.FACE_IDLE
+
+            eyes_surface = self.font.render(":", True, (0, 255, 0))
+            mouth_surface = self.font.render(mouth_anim, True, (0, 255, 0))
+            eyes_x = self.SCREEN_WIDTH // 2 - eyes_surface.get_width() - 20
+            eyes_y = self.SCREEN_HEIGHT // 2 - eyes_surface.get_height() // 2
+            mouth_x = eyes_x + eyes_surface.get_width() + 5
+            mouth_y = eyes_y
+            self.screen.blit(eyes_surface, (eyes_x, eyes_y))
+            self.screen.blit(mouth_surface, (mouth_x, mouth_y))
+        except Exception as e:
+            self.logger.info(f"Error drawing face: {e}")
+
+    def draw_interference(self):
+        try:
+            interference_speed = 5.0  # 1.0 = normal, <1.0 = slower, >1.0 = faster
+            t = pygame.time.get_ticks() / 1000.0  # seconds
+            frame = int(t * interference_speed)
+            random.seed(1000 + frame)
+            self.interference_surface.fill((0, 0, 0, 0))
+            for _ in range(random.randint(1, 3)):
+                y = random.randint(0, self.SCREEN_HEIGHT)
+                height = random.randint(1, 3)
+                alpha = random.randint(30, 100)
+                color = (0, 255, 0, alpha)
+                pygame.draw.rect(self.interference_surface, color, (0, y, self.SCREEN_WIDTH, height))
+            self.screen.blit(self.interference_surface, (0, 0))
+        except Exception as e:
+            self.logger.info(f"Error drawing interference: {e}")
+
+    def load_recordings(self):
+        self.logger.info("Entered load_recordings")
+        try:
+            if os.path.exists(self.SAVE_FILE):
+                try:
+                    with open(self.SAVE_FILE, "r") as f:
+                        self.recordings = json.load(f)
+                    self.logger.info(f"Loaded recordings from {self.SAVE_FILE}")
+                except Exception as e:
+                    self.logger.info(f"Error loading recordings: {e}")
+                    self.recordings = {}
+            else:
+                self.recordings = {}
+        except Exception as e:
+            self.logger.info(f"Error in load_recordings: {e}")
+
+    def save_recordings(self):
+        self.logger.info("Entered save_recordings")
+        try:
+            with open(self.SAVE_FILE, "w") as f:
+                json.dump(self.recordings, f)
+            self.logger.info(f"Saved recordings to {self.SAVE_FILE}")
+        except Exception as e:
+            self.logger.info(f"Error saving recordings: {e}")
+
+    def beep(self, freq=440, duration=180, volume=0.3):
+        try:
+            pygame.mixer.init(frequency=22050, size=-16)
+            sample_rate = 22050
+            n_samples = int(round(duration * sample_rate / 1000))
+            buf = (volume * 32767 * np.sin(2.0 * np.pi * np.arange(n_samples) * freq / sample_rate)).astype(np.int16)
+            mixer_channels = pygame.mixer.get_init()[2]
+            if mixer_channels == 1:
+                if buf.ndim == 1:
+                    arr = buf
+                else:
+                    arr = buf.reshape(-1)
+            elif mixer_channels == 2:
+                arr = np.repeat(buf[:, np.newaxis], 2, axis=1)
+            else:
+                raise ValueError(f"Unsupported mixer channels: {mixer_channels}")
+            sound = pygame.sndarray.make_sound(arr)
+            sound.play()
+            pygame.time.delay(duration)
+            sound.stop()
+            pygame.mixer.quit()
+        except Exception as e:
+            self.logger.info(f"Beep error: {e}")
+
+    def handle_question(self):
+        self.logger.info("Entered handle_question")
+        try:
+            recognizer = sr.Recognizer()
+            mic = sr.Microphone()
+            with mic as source:
+                recognizer.adjust_for_ambient_noise(source)
+                try:
+                    self.beep(880, 120)
+                    self.logger.info("Ask your question...")
+                    self.listening_state = "question"
+                    audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
+                except sr.WaitTimeoutError:
+                    self.logger.info("No speech detected. Please try again.")
+                    return
+            try:
+                question = recognizer.recognize_google(audio)
+                self.logger.info(f"Recognized question: {question}")
+            except Exception as e:
+                self.logger.info(f"Could not recognize question: {e}")
+                return
+
+            try:
+                response = self.ai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    store=True,
+                    messages=[
+                        {"role": "system", "content": "When you write equations, use words for operators, e.g., 'times' instead of '*', 'divided by' instead of '/', etc."},
+                        {"role": "user", "content": question}
+                    ]
+                )
+                answer = response.choices[0].message.content.strip()
+                self.logger.info(f"Answer: {answer}")
+            except Exception as e:
+                answer = "Sorry, I could not get an answer."
+                self.logger.info(f"OpenAI error: {e}")
+
+            self.tts_queue.put(answer)
+        except Exception as e:
+            self.logger.error(f"Error in handle_question: {e}")
+
+
     def is_raspberry_pi(self):
+        self.logger.info("Checking if running on Raspberry Pi...")
         try:
             with open("/proc/device-tree/model") as f:
                 return "Raspberry Pi" in f.read()
@@ -765,6 +724,7 @@ class OldTV:
             self.logger.info(f"Error drawing Pi status: {e}")
 
     def tts_worker(self):
+        self.logger.info("Entered tts_worker")
         while True:
             text = self.tts_queue.get()
             if text is None:
@@ -782,6 +742,7 @@ class OldTV:
                 self.run_wake_word_listener()  # <-- Only here for TTS!
 
     def shutdown(self):
+        self.logger.info("Shutting down...")
         try:
             self.logger.info("Shutting down TTS worker...")
             self.tts_queue.put(None)
@@ -791,7 +752,7 @@ class OldTV:
 
     def main(self):
         try:
-            self.run_wake_word_listener()
+            #self.run_wake_word_listener()
             running = True
             mouth_anim_default = ")"
             mouth_anim = mouth_anim_default
@@ -873,7 +834,8 @@ class OldTV:
                                     key_name = pygame.key.name(event.key)
                                     if key_name in self.recordings:
                                         self.logger.info(f"Playing '{key_name}': {self.recordings[key_name]}")
-                                        self.play_message(self.recordings[key_name])
+                                        self.stop_wake_word_listener()
+                                        self.tts_queue.put(self.recordings[key_name])
                                 elif event.key == pygame.K_ESCAPE:
                                     self.logger.info("Exiting...")
                                     running = False
