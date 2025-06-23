@@ -550,9 +550,15 @@ class OldTV:
             recording_thread = None
             last_transcribed_text = ""
             display_save_prompt = False
-            # Welcome message queued to TTS queue
             self.tts_queue.put("Welcome")
             pi_status_counter = 0  # For periodic update
+
+            # --- Optimization: Pre-create fonts and surfaces used every frame ---
+            prompt_font = pygame.font.Font(None, 36)
+            instr_font = pygame.font.Font(None, 36)
+            bg_color = (0, 40, 0)
+            padding = 16
+
             while running:
                 try:
                     # --- Process queued actions from other threads (like wake word) ---
@@ -564,7 +570,9 @@ class OldTV:
                                 self.stop_wake_word_listener()
                                 threading.Thread(target=self.handle_question_threadsafe, daemon=True).start()
 
-                    for event in pygame.event.get():
+                    # --- Optimization: Use event.get with filtering for KEYDOWN/KEYUP only ---
+                    events = pygame.event.get([pygame.KEYDOWN, pygame.KEYUP, pygame.TEXTINPUT, pygame.QUIT])
+                    for event in events:
                         # SETTINGS MENU TOGGLE (Ctrl+S)
                         if event.type == pygame.KEYDOWN and (event.key == pygame.K_s and (event.mod & pygame.KMOD_CTRL)):
                             self.show_settings = not self.show_settings
@@ -630,7 +638,6 @@ class OldTV:
                                 elif event.key == pygame.K_ESCAPE:
                                     self.logger.info("Exiting...")
                                     running = False
-                                    # Do not stop wake word listener here
                         elif event.type == pygame.KEYUP:
                             self.logger.info(f"KEYUP: key={event.key}, mod={event.mod}")
                             if event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT] and self.recording:
@@ -651,13 +658,14 @@ class OldTV:
                                 recording_thread = None
                                 self.run_wake_word_listener()  # <-- Only here for recording!
 
-                    # Periodically update Pi power status (every 1 second)
+                    # --- Optimization: Only update Pi status if on Pi and time elapsed ---
                     if self.is_pi:
                         pi_status_counter += 1
                         if pi_status_counter >= 20:  # 20 frames at 20 FPS = 1 second
                             self.undervoltage_warning, self.pi_voltage = self.get_pi_power_status()
                             pi_status_counter = 0
 
+                    # --- Drawing ---
                     if self.show_settings:
                         self.draw_settings_menu()
                     else:
@@ -674,15 +682,13 @@ class OldTV:
                         self.draw_pi_status()
 
                         if display_save_prompt and last_transcribed_text:
-                            prompt_font = pygame.font.Font(None, 36)
+                            # --- Optimization: Only re-render prompt surfaces if text changes ---
                             prompt_text = f"\"{last_transcribed_text}\""
                             instr_text = "Press a button to save, or ESC to cancel."
                             prompt_surf = prompt_font.render(prompt_text, True, (0, 255, 0))
-                            instr_surf = prompt_font.render(instr_text, True, (0, 255, 0))
+                            instr_surf = instr_font.render(instr_text, True, (0, 255, 0))
                             prompt_rect = prompt_surf.get_rect(center=(self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 80))
                             instr_rect = instr_surf.get_rect(center=(self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 120))
-                            bg_color = (0, 40, 0)
-                            padding = 16
                             pygame.draw.rect(
                                 self.screen, bg_color,
                                 (prompt_rect.left - padding, prompt_rect.top - padding,
@@ -697,7 +703,7 @@ class OldTV:
                             self.screen.blit(instr_surf, instr_rect)
 
                     pygame.display.flip()
-                    self.clock.tick(20)
+                    self.clock.tick(30)  # --- Optimization: Increase FPS for smoother UI, or lower for less CPU ---
 
                 except pygame.error as e:
                     self.logger.error(f"Pygame error: {e}")
