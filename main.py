@@ -22,6 +22,7 @@ class OldTV:
 
     def __init__(self):
         try:
+            os.environ["SDL_VIDEODRIVER"] = "x11"
             self.debug_mode = False
             self.show_settings = False
             self.settings_voice_index = 0
@@ -675,7 +676,7 @@ class OldTV:
                     model="gpt-4o-mini",
                     store=True,
                     messages=[
-                        {"role": "system", "content": "When you write equations, use words for operators, e.g., 'times' instead of '*', 'divided by' instead of '/', etc."},
+                        {"role": "system", "content": "You are a friendly chatbot. Keep your responses brief, conversational, and easy to read aloud using a speech synthesizer like espeak. Avoid long or complex words."},
                         {"role": "user", "content": question}
                     ]
                 )
