@@ -307,36 +307,6 @@ class OldTV:
         except Exception as e:
             self.logger.error(f"Error in start_wake_word_listener: {e}")
 
-    def draw_listening_indicator(self):
-        try:
-            t = pygame.time.get_ticks() / 1000.0
-            pulse = 0.5 + 0.5 * math.sin(t * 2)
-            min_radius = 2
-            max_radius = 10
-            radius = int(min_radius + (max_radius - min_radius) * pulse)
-            if self.listening_state == "wake_word":
-                color = (0, 255, 0)
-            elif self.listening_state == "question":
-                color = (255, 140, 0)
-            else:
-                return
-            pygame.draw.circle(self.screen, color, (60, 60), radius)
-        except Exception as e:
-            self.logger.info(f"Error in draw_listening_indicator: {e}")
-
-    def draw_debug_logs(self):
-        try:
-            if not self.debug_mode:
-                return
-            font = pygame.font.Font(None, 22)
-            y = 50
-            for line in list(self.log_buffer)[-15:]:
-                surf = font.render(line, True, (255, 255, 0))
-                self.screen.blit(surf, (10, y))
-                y += 18
-        except Exception as e:
-            self.logger.info(f"Error in draw_debug_logs: {e}")
-
     def apply_settings(self):
         try:
             # Set voice and rate from settings
@@ -347,83 +317,6 @@ class OldTV:
             self.logger.info(f"Applied TTS settings: voice={self.settings_voice_list[self.settings_voice_index].name}, rate={self.settings_voice_rate}")
         except Exception as e:
             self.logger.info(f"Error applying settings: {e}")
-
-    def draw_settings_menu(self):
-        try:
-            menu_font = pygame.font.Font(None, 22)
-            title_font = pygame.font.Font(None, 32)
-            y = 20
-            self.screen.fill((10, 10, 10))
-            # Title
-            title = title_font.render("Settings", True, (0, 255, 0))
-            self.screen.blit(title, (self.SCREEN_WIDTH // 2 - title.get_width() // 2, y))
-            y += 40
-
-            # Voice selection (show current and total, allow scrolling)
-            voice_label = menu_font.render("TTS Voice:", True, (255, 255, 255))
-            self.screen.blit(voice_label, (30, y))
-            if self.settings_voice_list:
-                total_voices = len(self.settings_voice_list)
-                idx = self.settings_voice_index
-                voice = self.settings_voice_list[idx]
-                voice_text = menu_font.render(f"{idx+1}/{total_voices}: {voice.name}", True, (0, 255, 0))
-                self.screen.blit(voice_text, (150, y))
-            y += 28
-
-            # Rate slider (compact)
-            rate_label = menu_font.render("Rate:", True, (255, 255, 255))
-            self.screen.blit(rate_label, (30, y))
-            rate_val = menu_font.render(str(self.settings_voice_rate), True, (0, 255, 0))
-            self.screen.blit(rate_val, (90, y))
-            slider_x = 140
-            slider_y = y + 10
-            slider_w = 120
-            slider_h = 6
-            pygame.draw.rect(self.screen, (80, 80, 80), (slider_x, slider_y, slider_w, slider_h))
-            rate_range = self.settings_rate_max - self.settings_rate_min
-            knob_pos = int(slider_x + ((self.settings_voice_rate - self.settings_rate_min) / rate_range) * slider_w)
-            pygame.draw.circle(self.screen, (0, 255, 0), (knob_pos, slider_y + slider_h // 2), 8)
-            y += 28
-
-            # Recordings (show up to 7 at a time, scrollable)
-            rec_label = menu_font.render("Recordings:", True, (255, 255, 255))
-            self.screen.blit(rec_label, (30, y))
-            y += 22
-            rec_keys = list(self.recordings.keys())
-            max_visible = 7
-            rec_start = 0
-            if self.settings_selected_recording and self.settings_selected_recording in rec_keys:
-                idx = rec_keys.index(self.settings_selected_recording)
-                if idx >= max_visible:
-                    rec_start = idx - max_visible + 1
-            for i, key in enumerate(rec_keys[rec_start:rec_start+max_visible]):
-                color = (0, 255, 0) if self.settings_selected_recording == key else (180, 180, 180)
-                msg = self.recordings[key][:20] + ("..." if len(self.recordings[key]) > 20 else "")
-                rec_text = menu_font.render(f"{key}: {msg}", True, color)
-                self.screen.blit(rec_text, (60, y + i * 20))
-            y += max_visible * 20 + 4
-
-            # Edit box for selected recording
-            if self.settings_selected_recording:
-                edit_label = menu_font.render("Edit:", True, (255, 255, 255))
-                self.screen.blit(edit_label, (30, y))
-                edit_box = pygame.Rect(80, y, 320, 22)
-                pygame.draw.rect(self.screen, (40, 40, 40), edit_box)
-                edit_text = menu_font.render(self.settings_edit_text[:40], True, (0, 255, 0))
-                self.screen.blit(edit_text, (edit_box.x + 5, edit_box.y + 2))
-                y += 26
-
-            # Instructions (smaller font)
-            instr_font = pygame.font.Font(None, 16)
-            instr = [
-                "UP/DOWN: Change voice   LEFT/RIGHT: Adjust rate",
-                "TAB: Next recording   DEL: Delete   E: Edit   ENTER: Save   ESC: Close"
-            ]
-            for i, line in enumerate(instr):
-                instr_text = instr_font.render(line, True, (180, 180, 180))
-                self.screen.blit(instr_text, (30, self.SCREEN_HEIGHT - 40 + i * 16))
-        except Exception as e:
-            self.logger.info(f"Error drawing settings menu: {e}")
 
     def handle_settings_event(self, event):
         self.logger.info("Entered handle_settings_event")
@@ -511,97 +404,7 @@ class OldTV:
         except Exception as e:
             self.logger.info(f"Error in fallback_syllable_count: {e}")
             return 1
-
-    def on_start_word(self, name, location, length):
-        try:
-            self.logger.info(f"Started word: {name}, Location: {location}, Length: {length}")
-            self.is_talking = True
-            if self.interrupt_tts:
-                self.logger.info("Interrupting TTS playback")
-                self.engine.stop()
-                self.interrupt_tts = False
-                self.is_talking = False
-        except Exception as e:
-            self.logger.info(f"Error in on_start_word: {e}")
-
-    def on_start(self, name):
-        try:
-            self.logger.info(f"Started speaking: {name}")
-            self.is_talking = True
-        except Exception as e:
-            self.logger.info(f"Error in on_start: {e}")
-
-    def on_end(self, name, completed):
-        try:
-            self.logger.info(f"Finished speaking: {name}, Completed: {completed}")
-            self.is_talking = False
-        except Exception as e:
-            self.logger.info(f"Error in on_end: {e}")
-        
-    def on_error(self, name, error):
-        try:
-            self.logger.info(f"Error in TTS: {name}, Error: {error}")
-            self.is_talking = False
-        except Exception as e:
-            self.logger.info(f"Error in on_error: {e}")
-
-    def draw_background(self):
-        try:
-            noise_speed = 5.0  # 1.0 = normal, <1.0 = slower, >1.0 = faster
-            t = pygame.time.get_ticks() / 1000.0  # seconds
-            frame = int(t * noise_speed)
-            random.seed(frame)
-            self.screen.fill((0, 40, 0))  # Dark CRT green
-            for _ in range(self.NOISE_DOTS):
-                x = random.randint(0, self.SCREEN_WIDTH)
-                y = random.randint(0, self.SCREEN_HEIGHT)
-                color = (0, random.randint(100, 255), 0)
-                self.screen.set_at((x, y), color)
-        except Exception as e:
-            self.logger.info(f"Error drawing background: {e}")
-
-    def draw_face(self, mouth=")"):
-        try:
-            wpm = 120  # Animation speed: words per minute
-            wps = wpm / 60.0
-            cycle_duration = 1.0 / wps  # seconds per word (open+close)
-            half_cycle = cycle_duration / 2
-
-            if self.is_talking:
-                t = pygame.time.get_ticks() / 1000.0  # seconds
-                phase = int((t % cycle_duration) // half_cycle)
-                mouth_anim = self.FACE_NORMAL if phase == 0 else self.FACE_WAIT
-            else:
-                mouth_anim = self.FACE_IDLE
-
-            eyes_surface = self.font.render(":", True, (0, 255, 0))
-            mouth_surface = self.font.render(mouth_anim, True, (0, 255, 0))
-            eyes_x = self.SCREEN_WIDTH // 2 - eyes_surface.get_width() - 20
-            eyes_y = self.SCREEN_HEIGHT // 2 - eyes_surface.get_height() // 2
-            mouth_x = eyes_x + eyes_surface.get_width() + 5
-            mouth_y = eyes_y
-            self.screen.blit(eyes_surface, (eyes_x, eyes_y))
-            self.screen.blit(mouth_surface, (mouth_x, mouth_y))
-        except Exception as e:
-            self.logger.info(f"Error drawing face: {e}")
-
-    def draw_interference(self):
-        try:
-            interference_speed = 5.0  # 1.0 = normal, <1.0 = slower, >1.0 = faster
-            t = pygame.time.get_ticks() / 1000.0  # seconds
-            frame = int(t * interference_speed)
-            random.seed(1000 + frame)
-            self.interference_surface.fill((0, 0, 0, 0))
-            for _ in range(random.randint(1, 3)):
-                y = random.randint(0, self.SCREEN_HEIGHT)
-                height = random.randint(1, 3)
-                alpha = random.randint(30, 100)
-                color = (0, 255, 0, alpha)
-                pygame.draw.rect(self.interference_surface, color, (0, y, self.SCREEN_WIDTH, height))
-            self.screen.blit(self.interference_surface, (0, 0))
-        except Exception as e:
-            self.logger.info(f"Error drawing interference: {e}")
-
+    
     def load_recordings(self):
         self.logger.info("Entered load_recordings")
         try:
@@ -692,7 +495,6 @@ class OldTV:
         except Exception as e:
             self.logger.error(f"Error in handle_question: {e}")
 
-
     def is_raspberry_pi(self):
         self.logger.info("Checking if running on Raspberry Pi...")
         try:
@@ -711,20 +513,6 @@ class OldTV:
             return undervoltage, volts
         except Exception:
             return False, "Unavailable"
-
-    def draw_pi_status(self):
-        try:
-            # Only show if in debug mode or currently under voltage
-            if self.is_pi and (self.debug_mode or self.undervoltage_warning):
-                font = pygame.font.Font(None, 24)
-                y = self.SCREEN_HEIGHT - 60
-                volt_text = font.render(f"Pi Voltage: {self.pi_voltage}", True, (255, 255, 0))
-                self.screen.blit(volt_text, (10, y))
-                if self.undervoltage_warning:
-                    warn_text = font.render("!!! UNDERVOLTAGE DETECTED !!!", True, (255, 0, 0))
-                    self.screen.blit(warn_text, (10, y + 30))
-        except Exception as e:
-            self.logger.info(f"Error drawing Pi status: {e}")
 
     def tts_worker(self):
         self.logger.info("Entered tts_worker")
@@ -923,5 +711,220 @@ class OldTV:
         except Exception as e:
             print(f"Fatal error in main: {e}")
 
+    # region TTS Callbacks
+    def on_start_word(self, name, location, length):
+        try:
+            self.logger.info(f"Started word: {name}, Location: {location}, Length: {length}")
+            self.is_talking = True
+            if self.interrupt_tts:
+                self.logger.info("Interrupting TTS playback")
+                self.engine.stop()
+                self.interrupt_tts = False
+                self.is_talking = False
+        except Exception as e:
+            self.logger.info(f"Error in on_start_word: {e}")
+
+    def on_start(self, name):
+        try:
+            self.logger.info(f"Started speaking: {name}")
+            self.is_talking = True
+        except Exception as e:
+            self.logger.info(f"Error in on_start: {e}")
+
+    def on_end(self, name, completed):
+        try:
+            self.logger.info(f"Finished speaking: {name}, Completed: {completed}")
+            self.is_talking = False
+        except Exception as e:
+            self.logger.info(f"Error in on_end: {e}")
+
+    def on_error(self, name, error):
+        try:
+            self.logger.info(f"Error in TTS: {name}, Error: {error}")
+            self.is_talking = False
+        except Exception as e:
+            self.logger.info(f"Error in on_error: {e}")
+    # endregion
+    
+    # region Drawing Methods
+    def draw_background(self):
+        try:
+            noise_speed = 5.0  # 1.0 = normal, <1.0 = slower, >1.0 = faster
+            t = pygame.time.get_ticks() / 1000.0  # seconds
+            frame = int(t * noise_speed)
+            random.seed(frame)
+            self.screen.fill((0, 40, 0))  # Dark CRT green
+            for _ in range(self.NOISE_DOTS):
+                x = random.randint(0, self.SCREEN_WIDTH)
+                y = random.randint(0, self.SCREEN_HEIGHT)
+                color = (0, random.randint(100, 255), 0)
+                self.screen.set_at((x, y), color)
+        except Exception as e:
+            self.logger.info(f"Error drawing background: {e}")
+
+    def draw_face(self, mouth=")"):
+        try:
+            wpm = 120  # Animation speed: words per minute
+            wps = wpm / 60.0
+            cycle_duration = 1.0 / wps  # seconds per word (open+close)
+            half_cycle = cycle_duration / 2
+
+            if self.is_talking:
+                t = pygame.time.get_ticks() / 1000.0  # seconds
+                phase = int((t % cycle_duration) // half_cycle)
+                mouth_anim = self.FACE_NORMAL if phase == 0 else self.FACE_WAIT
+            else:
+                mouth_anim = self.FACE_IDLE
+
+            eyes_surface = self.font.render(":", True, (0, 255, 0))
+            mouth_surface = self.font.render(mouth_anim, True, (0, 255, 0))
+            eyes_x = self.SCREEN_WIDTH // 2 - eyes_surface.get_width() - 20
+            eyes_y = self.SCREEN_HEIGHT // 2 - eyes_surface.get_height() // 2
+            mouth_x = eyes_x + eyes_surface.get_width() + 5
+            mouth_y = eyes_y
+            self.screen.blit(eyes_surface, (eyes_x, eyes_y))
+            self.screen.blit(mouth_surface, (mouth_x, mouth_y))
+        except Exception as e:
+            self.logger.info(f"Error drawing face: {e}")
+
+    def draw_interference(self):
+        try:
+            interference_speed = 5.0  # 1.0 = normal, <1.0 = slower, >1.0 = faster
+            t = pygame.time.get_ticks() / 1000.0  # seconds
+            frame = int(t * interference_speed)
+            random.seed(1000 + frame)
+            self.interference_surface.fill((0, 0, 0, 0))
+            for _ in range(random.randint(1, 3)):
+                y = random.randint(0, self.SCREEN_HEIGHT)
+                height = random.randint(1, 3)
+                alpha = random.randint(30, 100)
+                color = (0, 255, 0, alpha)
+                pygame.draw.rect(self.interference_surface, color, (0, y, self.SCREEN_WIDTH, height))
+            self.screen.blit(self.interference_surface, (0, 0))
+        except Exception as e:
+            self.logger.info(f"Error drawing interference: {e}")
+    
+    def draw_pi_status(self):
+        try:
+            # Only show if in debug mode or currently under voltage
+            if self.is_pi and (self.debug_mode or self.undervoltage_warning):
+                font = pygame.font.Font(None, 24)
+                y = self.SCREEN_HEIGHT - 60
+                volt_text = font.render(f"Pi Voltage: {self.pi_voltage}", True, (255, 255, 0))
+                self.screen.blit(volt_text, (10, y))
+                if self.undervoltage_warning:
+                    warn_text = font.render("!!! UNDERVOLTAGE DETECTED !!!", True, (255, 0, 0))
+                    self.screen.blit(warn_text, (10, y + 30))
+        except Exception as e:
+            self.logger.info(f"Error drawing Pi status: {e}")
+
+    def draw_listening_indicator(self):
+        try:
+            t = pygame.time.get_ticks() / 1000.0
+            pulse = 0.5 + 0.5 * math.sin(t * 2)
+            min_radius = 2
+            max_radius = 10
+            radius = int(min_radius + (max_radius - min_radius) * pulse)
+            if self.listening_state == "wake_word":
+                color = (0, 255, 0)
+            elif self.listening_state == "question":
+                color = (255, 140, 0)
+            else:
+                return
+            pygame.draw.circle(self.screen, color, (60, 60), radius)
+        except Exception as e:
+            self.logger.info(f"Error in draw_listening_indicator: {e}")
+
+    def draw_debug_logs(self):
+        try:
+            if not self.debug_mode:
+                return
+            font = pygame.font.Font(None, 22)
+            y = 50
+            for line in list(self.log_buffer)[-15:]:
+                surf = font.render(line, True, (255, 255, 0))
+                self.screen.blit(surf, (10, y))
+                y += 18
+        except Exception as e:
+            self.logger.info(f"Error in draw_debug_logs: {e}")
+
+    def draw_settings_menu(self):
+        try:
+            menu_font = pygame.font.Font(None, 22)
+            title_font = pygame.font.Font(None, 32)
+            y = 20
+            self.screen.fill((10, 10, 10))
+            # Title
+            title = title_font.render("Settings", True, (0, 255, 0))
+            self.screen.blit(title, (self.SCREEN_WIDTH // 2 - title.get_width() // 2, y))
+            y += 40
+
+            # Voice selection (show current and total, allow scrolling)
+            voice_label = menu_font.render("TTS Voice:", True, (255, 255, 255))
+            self.screen.blit(voice_label, (30, y))
+            if self.settings_voice_list:
+                total_voices = len(self.settings_voice_list)
+                idx = self.settings_voice_index
+                voice = self.settings_voice_list[idx]
+                voice_text = menu_font.render(f"{idx+1}/{total_voices}: {voice.name}", True, (0, 255, 0))
+                self.screen.blit(voice_text, (150, y))
+            y += 28
+
+            # Rate slider (compact)
+            rate_label = menu_font.render("Rate:", True, (255, 255, 255))
+            self.screen.blit(rate_label, (30, y))
+            rate_val = menu_font.render(str(self.settings_voice_rate), True, (0, 255, 0))
+            self.screen.blit(rate_val, (90, y))
+            slider_x = 140
+            slider_y = y + 10
+            slider_w = 120
+            slider_h = 6
+            pygame.draw.rect(self.screen, (80, 80, 80), (slider_x, slider_y, slider_w, slider_h))
+            rate_range = self.settings_rate_max - self.settings_rate_min
+            knob_pos = int(slider_x + ((self.settings_voice_rate - self.settings_rate_min) / rate_range) * slider_w)
+            pygame.draw.circle(self.screen, (0, 255, 0), (knob_pos, slider_y + slider_h // 2), 8)
+            y += 28
+
+            # Recordings (show up to 7 at a time, scrollable)
+            rec_label = menu_font.render("Recordings:", True, (255, 255, 255))
+            self.screen.blit(rec_label, (30, y))
+            y += 22
+            rec_keys = list(self.recordings.keys())
+            max_visible = 7
+            rec_start = 0
+            if self.settings_selected_recording and self.settings_selected_recording in rec_keys:
+                idx = rec_keys.index(self.settings_selected_recording)
+                if idx >= max_visible:
+                    rec_start = idx - max_visible + 1
+            for i, key in enumerate(rec_keys[rec_start:rec_start+max_visible]):
+                color = (0, 255, 0) if self.settings_selected_recording == key else (180, 180, 180)
+                msg = self.recordings[key][:20] + ("..." if len(self.recordings[key]) > 20 else "")
+                rec_text = menu_font.render(f"{key}: {msg}", True, color)
+                self.screen.blit(rec_text, (60, y + i * 20))
+            y += max_visible * 20 + 4
+
+            # Edit box for selected recording
+            if self.settings_selected_recording:
+                edit_label = menu_font.render("Edit:", True, (255, 255, 255))
+                self.screen.blit(edit_label, (30, y))
+                edit_box = pygame.Rect(80, y, 320, 22)
+                pygame.draw.rect(self.screen, (40, 40, 40), edit_box)
+                edit_text = menu_font.render(self.settings_edit_text[:40], True, (0, 255, 0))
+                self.screen.blit(edit_text, (edit_box.x + 5, edit_box.y + 2))
+                y += 26
+
+            # Instructions (smaller font)
+            instr_font = pygame.font.Font(None, 16)
+            instr = [
+                "UP/DOWN: Change voice   LEFT/RIGHT: Adjust rate",
+                "TAB: Next recording   DEL: Delete   E: Edit   ENTER: Save   ESC: Close"
+            ]
+            for i, line in enumerate(instr):
+                instr_text = instr_font.render(line, True, (180, 180, 180))
+                self.screen.blit(instr_text, (30, self.SCREEN_HEIGHT - 40 + i * 16))
+        except Exception as e:
+            self.logger.info(f"Error drawing settings menu: {e}")
+
+    # endregion
 if __name__ == "__main__":
     OldTV().main()
