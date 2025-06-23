@@ -220,7 +220,8 @@ class OldTV:
                     audio = self.recognizer.record(source)
                     self.logger.info("Audio file read, sending to Google")
                     text = self.recognizer.recognize_google(audio, language="en-US")
-                    self.logger.info(f"Recognized text: {text}")
+                    if text:
+                        self.logger.info(f"Recognized text: {text}")
                     return text
             except sr.UnknownValueError:
                 self.logger.info("Speech recognition failed: Could not understand audio")
@@ -289,7 +290,8 @@ class OldTV:
                             result = recognizer.Result()
                             import json
                             text = json.loads(result).get("text", "").lower()
-                            self.logger.info(f"Recognized: {text}")
+                            if text:
+                                self.logger.info(f"Recognized: {text}")
                             if "stop" in text:
                                 self.logger.info("Wake word 'stop' detected!")
                                 if self.engine.isBusy():
