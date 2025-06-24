@@ -22,7 +22,7 @@ class OldTV:
 
     def __init__(self):
         try:
-            os.environ["SDL_VIDEODRIVER"] = "x11"
+            #os.environ["SDL_VIDEODRIVER"] = "x11"
             self.debug_mode = False
             self.show_settings = False
             self.settings_voice_index = 0
@@ -541,6 +541,30 @@ class OldTV:
         except Exception as e:
             self.logger.info(f"Error during shutdown: {e}")
 
+    def draw_save_prompt(self, prompt_font, instr_font, bg_color, padding, last_transcribed_text):
+        """Draws the save prompt overlay with the transcribed text."""
+        try:
+            prompt_text = f"\"{last_transcribed_text}\""
+            instr_text = "Press a button to save, or ESC to cancel."
+            prompt_surf = prompt_font.render(prompt_text, True, (0, 255, 0))
+            instr_surf = instr_font.render(instr_text, True, (0, 255, 0))
+            prompt_rect = prompt_surf.get_rect(center=(self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 80))
+            instr_rect = instr_surf.get_rect(center=(self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 120))
+            pygame.draw.rect(
+                self.screen, bg_color,
+                (prompt_rect.left - padding, prompt_rect.top - padding,
+                 prompt_rect.width + 2 * padding, prompt_rect.height + 2 * padding)
+            )
+            pygame.draw.rect(
+                self.screen, bg_color,
+                (instr_rect.left - padding, instr_rect.top - padding,
+                 instr_rect.width + 2 * padding, instr_rect.height + 2 * padding)
+            )
+            self.screen.blit(prompt_surf, prompt_rect)
+            self.screen.blit(instr_surf, instr_rect)
+        except Exception as e:
+            self.logger.info(f"Error drawing save prompt: {e}")
+
     def main(self):
         try:
             #self.run_wake_word_listener()
@@ -569,7 +593,7 @@ class OldTV:
                                 self.handling_question = True
                                 self.stop_wake_word_listener()
                                 threading.Thread(target=self.handle_question_threadsafe, daemon=True).start()
-
+                    
                     # --- Optimization: Use event.get with filtering for KEYDOWN/KEYUP only ---
                     events = pygame.event.get([pygame.KEYDOWN, pygame.KEYUP, pygame.TEXTINPUT, pygame.QUIT])
                     for event in events:
@@ -669,41 +693,20 @@ class OldTV:
                     if self.show_settings:
                         self.draw_settings_menu()
                     else:
-                        if self.is_talking:
-                            mouth_anim = self.FACE_NORMAL if mouth_anim in [self.FACE_IDLE, self.FACE_WAIT] else self.FACE_WAIT
-                        else:
-                            mouth_anim = self.FACE_IDLE
-
                         self.draw_background()
-                        self.draw_face(mouth=mouth_anim)
+                        self.draw_face()
                         self.draw_interference()
                         self.draw_listening_indicator()
                         self.draw_debug_logs()
                         self.draw_pi_status()
 
                         if display_save_prompt and last_transcribed_text:
-                            # --- Optimization: Only re-render prompt surfaces if text changes ---
-                            prompt_text = f"\"{last_transcribed_text}\""
-                            instr_text = "Press a button to save, or ESC to cancel."
-                            prompt_surf = prompt_font.render(prompt_text, True, (0, 255, 0))
-                            instr_surf = instr_font.render(instr_text, True, (0, 255, 0))
-                            prompt_rect = prompt_surf.get_rect(center=(self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 80))
-                            instr_rect = instr_surf.get_rect(center=(self.SCREEN_WIDTH // 2, self.SCREEN_HEIGHT // 2 + 120))
-                            pygame.draw.rect(
-                                self.screen, bg_color,
-                                (prompt_rect.left - padding, prompt_rect.top - padding,
-                                 prompt_rect.width + 2 * padding, prompt_rect.height + 2 * padding)
+                            self.draw_save_prompt(
+                                prompt_font, instr_font, bg_color, padding, last_transcribed_text
                             )
-                            pygame.draw.rect(
-                                self.screen, bg_color,
-                                (instr_rect.left - padding, instr_rect.top - padding,
-                                 instr_rect.width + 2 * padding, instr_rect.height + 2 * padding)
-                            )
-                            self.screen.blit(prompt_surf, prompt_rect)
-                            self.screen.blit(instr_surf, instr_rect)
 
                     pygame.display.flip()
-                    self.clock.tick(30)  # --- Optimization: Increase FPS for smoother UI, or lower for less CPU ---
+                    self.clock.tick(60)  # --- Optimization: Increase FPS for smoother UI, or lower for less CPU ---
 
                 except pygame.error as e:
                     self.logger.error(f"Pygame error: {e}")
@@ -768,7 +771,7 @@ class OldTV:
         except Exception as e:
             self.logger.info(f"Error drawing background: {e}")
 
-    def draw_face(self, mouth=")"):
+    def draw_face(self):
         try:
             wpm = 120  # Animation speed: words per minute
             wps = wpm / 60.0
