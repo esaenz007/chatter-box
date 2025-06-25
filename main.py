@@ -19,9 +19,16 @@ import subprocess
 from collections import deque
 
 class OldTV:
+    SETTINGS_FILE = "settings.json"
 
     def __init__(self):
         try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            model_path = os.path.join(script_dir, "models/vosk-model-small-en-us-0.15")
+            if not os.path.exists(model_path):
+                raise RuntimeError(f"Vosk model not found at {model_path}.  Current path: {os.getcwd()}")
+            self.wake_word_engine = vosk.KaldiRecognizer(vosk.Model(model_path), 16000)
+
             #os.environ["SDL_VIDEODRIVER"] = "x11"
             self.debug_mode = False
             self.show_settings = False
@@ -131,6 +138,8 @@ class OldTV:
             except Exception as e:
                 self.logger.info(f"TTS initialization failed: {e}")
                 sys.exit(1)
+            self.apply_settings()
+
             self.is_talking = False
             self.current_index = 0
             self.FACE_WAIT = ")"
@@ -264,14 +273,7 @@ class OldTV:
     def start_wake_word_listener(self):
         self.logger.info("Entered start_wake_word_listener")
         try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            model_path = os.path.join(script_dir, "models/vosk-model-small-en-us-0.15")
-            if not os.path.exists(model_path):
-                raise RuntimeError(f"Vosk model not found at {model_path}.  Current path: {os.getcwd()}")
-            model = vosk.Model(model_path)
-            recognizer = vosk.KaldiRecognizer(model, 16000)
-            wake_words = ["hey tv", "computer", "stop"]
-
+            
             q = queue.Queue()
 
             def audio_callback(indata, frames, time, status):
@@ -286,8 +288,8 @@ class OldTV:
                     self.logger.info("Listening for wake word ('hey tv', 'computer', or 'stop')...")
                     while not self.wake_word_stop_event.is_set():
                         data = q.get()
-                        if recognizer.AcceptWaveform(data):
-                            result = recognizer.Result()
+                        if self.wake_word_engine.AcceptWaveform(data):
+                            result = self.wake_word_engine.Result()
                             import json
                             text = json.loads(result).get("text", "").lower()
                             if text:
@@ -324,46 +326,53 @@ class OldTV:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.show_settings = False
-                    self.apply_settings()
+                    return
                 elif event.key == pygame.K_UP:
                     if self.settings_voice_list:
                         self.settings_voice_index = (self.settings_voice_index - 1) % len(self.settings_voice_list)
+                        self.apply_settings()
+                        self.save_settings()
                 elif event.key == pygame.K_DOWN:
                     if self.settings_voice_list:
                         self.settings_voice_index = (self.settings_voice_index + 1) % len(self.settings_voice_list)
+                        self.apply_settings()
+                        self.save_settings()
                 elif event.key == pygame.K_LEFT:
                     self.settings_voice_rate = max(self.settings_rate_min, self.settings_voice_rate - self.settings_rate_step)
+                    self.apply_settings()
+                    self.save_settings()
                 elif event.key == pygame.K_RIGHT:
                     self.settings_voice_rate = min(self.settings_rate_max, self.settings_voice_rate + self.settings_rate_step)
+                    self.apply_settings()
+                    self.save_settings()
                 elif event.key == pygame.K_TAB:
+                    # Cycle through recordings
                     rec_keys = list(self.recordings.keys())
                     if rec_keys:
-                        if self.settings_selected_recording is None:
-                            self.settings_selected_recording = rec_keys[0]
-                        else:
+                        if self.settings_selected_recording in rec_keys:
                             idx = rec_keys.index(self.settings_selected_recording)
-                            self.settings_selected_recording = rec_keys[(idx + 1) % len(rec_keys)]
+                            idx = (idx + 1) % len(rec_keys)
+                        else:
+                            idx = 0
+                        self.settings_selected_recording = rec_keys[idx]
                         self.settings_edit_text = self.recordings[self.settings_selected_recording]
                 elif event.key == pygame.K_DELETE:
-                    if self.settings_selected_recording:
+                    # Delete selected recording
+                    if self.settings_selected_recording in self.recordings:
                         del self.recordings[self.settings_selected_recording]
                         self.save_recordings()
                         self.settings_selected_recording = None
                         self.settings_edit_text = ""
                 elif event.key == pygame.K_e:
+                    # Start editing selected recording
                     if self.settings_selected_recording:
                         self.settings_edit_text = self.recordings[self.settings_selected_recording]
                 elif event.key == pygame.K_RETURN:
+                    # Save edited recording
                     if self.settings_selected_recording:
                         self.recordings[self.settings_selected_recording] = self.settings_edit_text
                         self.save_recordings()
-                elif event.key == pygame.K_BACKSPACE:
-                    if self.settings_selected_recording and self.settings_edit_text:
-                        self.settings_edit_text = self.settings_edit_text[:-1]
-                # Text input for editing
-            elif event.type == pygame.TEXTINPUT:
-                if self.settings_selected_recording:
-                    self.settings_edit_text += event.text
+            # Add more key handling as needed
         except Exception as e:
             self.logger.info(f"Error in handle_settings_event: {e}")
 
@@ -468,12 +477,14 @@ class OldTV:
                     audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
                 except sr.WaitTimeoutError:
                     self.logger.info("No speech detected. Please try again.")
+                    self.action_queue.put("wake_word")  # <-- Queue the action for main thread
                     return
             try:
                 question = recognizer.recognize_google(audio)
                 self.logger.info(f"Recognized question: {question}")
             except Exception as e:
                 self.logger.info(f"Could not recognize question: {e}")
+                self.action_queue.put("wake_word")  # <-- Queue the action for main thread
                 return
 
             try:
@@ -494,6 +505,7 @@ class OldTV:
             self.tts_queue.put(answer)
         except Exception as e:
             self.logger.error(f"Error in handle_question: {e}")
+        
 
     def is_raspberry_pi(self):
         self.logger.info("Checking if running on Raspberry Pi...")
@@ -565,162 +577,6 @@ class OldTV:
         except Exception as e:
             self.logger.info(f"Error drawing save prompt: {e}")
 
-    def main(self):
-        try:
-            #self.run_wake_word_listener()
-            running = True
-            mouth_anim_default = ")"
-            mouth_anim = mouth_anim_default
-            recording_thread = None
-            last_transcribed_text = ""
-            display_save_prompt = False
-            self.tts_queue.put("Welcome")
-            pi_status_counter = 0  # For periodic update
-
-            # --- Optimization: Pre-create fonts and surfaces used every frame ---
-            prompt_font = pygame.font.Font(None, 36)
-            instr_font = pygame.font.Font(None, 36)
-            bg_color = (0, 40, 0)
-            padding = 16
-
-            while running:
-                try:
-                    # --- Process queued actions from other threads (like wake word) ---
-                    while not self.action_queue.empty():
-                        action = self.action_queue.get()
-                        if action == "question":
-                            if not self.handling_question:
-                                self.handling_question = True
-                                self.stop_wake_word_listener()
-                                threading.Thread(target=self.handle_question_threadsafe, daemon=True).start()
-                    
-                    # --- Optimization: Use event.get with filtering for KEYDOWN/KEYUP only ---
-                    events = pygame.event.get([pygame.KEYDOWN, pygame.KEYUP, pygame.TEXTINPUT, pygame.QUIT])
-                    for event in events:
-                        # SETTINGS MENU TOGGLE (Ctrl+S)
-                        if event.type == pygame.KEYDOWN and (event.key == pygame.K_s and (event.mod & pygame.KMOD_CTRL)):
-                            self.show_settings = not self.show_settings
-                            continue
-                        if self.show_settings:
-                            self.handle_settings_event(event)
-                            continue
-                        if event.type == pygame.KEYDOWN:
-                            if event.key == pygame.K_d and (event.mod & pygame.KMOD_CTRL):
-                                self.debug_mode = not self.debug_mode
-                                self.logger.info(f"Debug mode {'enabled' if self.debug_mode else 'disabled'}")
-                            if display_save_prompt and self.awaiting_save:
-                                if event.key == pygame.K_ESCAPE:
-                                    self.logger.info("Save canceled by ESC")
-                                    self.awaiting_save = False
-                                    last_transcribed_text = ""
-                                    display_save_prompt = False
-                                elif event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT]:
-                                    self.stop_wake_word_listener()
-                                    self.beep(880, 120)
-                                    self.recording = True
-                                    self.awaiting_save = False
-                                    last_transcribed_text = ""
-                                    display_save_prompt = False
-                                    self.audio_data = []
-                                    recording_thread = threading.Thread(target=self.record_audio)
-                                    recording_thread.start()
-                                    self.logger.info("Started recording")
-                                elif event.key not in [pygame.K_LSHIFT, pygame.K_RSHIFT]:
-                                    key_name = pygame.key.name(event.key)
-                                    # Prevent saving to Ctrl key
-                                    if key_name in ["left ctrl", "right ctrl", "ctrl"]:
-                                        self.logger.info("Cannot save a recording to the Ctrl key.")
-                                        self.awaiting_save = False
-                                        last_transcribed_text = ""
-                                        display_save_prompt = False
-                                    elif last_transcribed_text and not last_transcribed_text.startswith("Error"):
-                                        self.recordings[key_name] = last_transcribed_text
-                                        self.logger.info(f"Saved to '{key_name}': {last_transcribed_text}")
-                                        self.save_recordings()
-                                        self.beep(440, 120)
-                                    else:
-                                        self.logger.info(f"Failed to save: {last_transcribed_text}")
-                                    self.awaiting_save = False
-                                    last_transcribed_text = ""
-                                    display_save_prompt = False
-                            else:
-                                if event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT] and not self.recording:
-                                    self.stop_wake_word_listener()
-                                    self.beep(880, 120)
-                                    self.recording = True
-                                    self.awaiting_save = False
-                                    self.audio_data = []
-                                    recording_thread = threading.Thread(target=self.record_audio)
-                                    recording_thread.start()
-                                    self.logger.info("Started recording")
-                                elif event.key not in [pygame.K_LSHIFT, pygame.K_RSHIFT, pygame.K_ESCAPE, pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT]:
-                                    key_name = pygame.key.name(event.key)
-                                    if key_name in self.recordings:
-                                        self.logger.info(f"Playing '{key_name}': {self.recordings[key_name]}")
-                                        self.stop_wake_word_listener()
-                                        self.tts_queue.put(self.recordings[key_name])
-                                elif event.key == pygame.K_ESCAPE:
-                                    self.logger.info("Exiting...")
-                                    running = False
-                        elif event.type == pygame.KEYUP:
-                            self.logger.info(f"KEYUP: key={event.key}, mod={event.mod}")
-                            if event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT] and self.recording:
-                                self.recording = False
-                                if recording_thread:
-                                    recording_thread.join(timeout=1)
-                                self.beep(440, 120)
-                                text = self.speech_to_text()
-                                if text:
-                                    self.logger.info(f"Recorded: {text}")
-                                    last_transcribed_text = text
-                                    self.awaiting_save = True
-                                    display_save_prompt = True
-                                else:
-                                    self.logger.info(f"Recording failed: {text}")
-                                    self.awaiting_save = False
-                                    display_save_prompt = False
-                                recording_thread = None
-                                self.run_wake_word_listener()  # <-- Only here for recording!
-
-                    # --- Optimization: Only update Pi status if on Pi and time elapsed ---
-                    if self.is_pi:
-                        pi_status_counter += 1
-                        if pi_status_counter >= 20:  # 20 frames at 20 FPS = 1 second
-                            self.undervoltage_warning, self.pi_voltage = self.get_pi_power_status()
-                            pi_status_counter = 0
-
-                    # --- Drawing ---
-                    if self.show_settings:
-                        self.draw_settings_menu()
-                    else:
-                        self.draw_background()
-                        self.draw_face()
-                        self.draw_interference()
-                        self.draw_listening_indicator()
-                        self.draw_debug_logs()
-                        self.draw_pi_status()
-
-                        if display_save_prompt and last_transcribed_text:
-                            self.draw_save_prompt(
-                                prompt_font, instr_font, bg_color, padding, last_transcribed_text
-                            )
-
-                    pygame.display.flip()
-                    self.clock.tick(60)  # --- Optimization: Increase FPS for smoother UI, or lower for less CPU ---
-
-                except pygame.error as e:
-                    self.logger.error(f"Pygame error: {e}")
-                except Exception as e:
-                    self.logger.error(f"Unexpected error: {e}")
-
-            self.save_recordings()
-            self.shutdown()
-            pygame.quit()
-            sys.exit()
-        except Exception as e:
-            print(f"Fatal error in main: {e}")
-
-    # region TTS Callbacks
     def on_start_word(self, name, location, length):
         try:
             self.logger.info(f"Started word: {name}, Location: {location}, Length: {length}")
@@ -753,9 +609,7 @@ class OldTV:
             self.is_talking = False
         except Exception as e:
             self.logger.info(f"Error in on_error: {e}")
-    # endregion
-    
-    # region Drawing Methods
+
     def draw_background(self):
         try:
             noise_speed = 5.0  # 1.0 = normal, <1.0 = slower, >1.0 = faster
@@ -934,6 +788,196 @@ class OldTV:
         except Exception as e:
             self.logger.info(f"Error drawing settings menu: {e}")
 
-    # endregion
+    def load_settings(self):
+        """Load TTS settings from file."""
+        if os.path.exists(self.SETTINGS_FILE):
+            try:
+                with open(self.SETTINGS_FILE, "r") as f:
+                    data = json.load(f)
+                self.settings_voice_index = data.get("voice_index", 0)
+                self.settings_voice_rate = data.get("voice_rate", 200)
+            except Exception as e:
+                self.logger.info(f"Error loading settings: {e}")
+
+    def save_settings(self):
+        """Save TTS settings to file."""
+        try:
+            with open(self.SETTINGS_FILE, "w") as f:
+                json.dump({
+                    "voice_index": self.settings_voice_index,
+                    "voice_rate": self.settings_voice_rate
+                }, f)
+        except Exception as e:
+            self.logger.info(f"Error saving settings: {e}")
+
+    def process_events(self, events, state):
+        """Handle all pygame events for this frame."""
+        for event in events:
+            # SETTINGS MENU TOGGLE (Ctrl+S)
+            if event.type == pygame.KEYDOWN and (event.key == pygame.K_s and (event.mod & pygame.KMOD_CTRL)):
+                self.show_settings = not self.show_settings
+                continue
+            if self.show_settings:
+                self.handle_settings_event(event)
+                continue
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_d and (event.mod & pygame.KMOD_CTRL):
+                    self.debug_mode = not self.debug_mode
+                    self.logger.info(f"Debug mode {'enabled' if self.debug_mode else 'disabled'}")
+                if state['display_save_prompt'] and self.awaiting_save:
+                    self.handle_save_prompt_keydown(event, state)
+                else:
+                    self.handle_main_keydown(event, state)
+            elif event.type == pygame.KEYUP:
+                self.logger.info(f"KEYUP: key={event.key}, mod={event.mod}")
+                if event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT] and self.recording:
+                    self.recording = False
+                    if state['recording_thread']:
+                        state['recording_thread'].join(timeout=1)
+                    self.beep(440, 120)
+                    text = self.speech_to_text()
+                    if text:
+                        self.logger.info(f"Recorded: {text}")
+                        state['last_transcribed_text'] = text
+                        self.awaiting_save = True
+                        state['display_save_prompt'] = True
+                    else:
+                        self.logger.info(f"Recording failed: {text}")
+                        self.awaiting_save = False
+                        state['display_save_prompt'] = False
+                    state['recording_thread'] = None
+                    self.run_wake_word_listener()
+
+    def handle_save_prompt_keydown(self, event, state):
+        if event.key == pygame.K_ESCAPE:
+            self.logger.info("Save canceled by ESC")
+            self.awaiting_save = False
+            state['last_transcribed_text'] = ""
+            state['display_save_prompt'] = False
+        elif event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT]:
+            self.stop_wake_word_listener()
+            self.beep(880, 120)
+            self.recording = True
+            self.awaiting_save = False
+            state['last_transcribed_text'] = ""
+            state['display_save_prompt'] = False
+            self.audio_data = []
+            state['recording_thread'] = threading.Thread(target=self.record_audio)
+            state['recording_thread'].start()
+            self.logger.info("Started recording")
+        elif event.key not in [pygame.K_LSHIFT, pygame.K_RSHIFT]:
+            key_name = pygame.key.name(event.key)
+            if key_name in ["left ctrl", "right ctrl", "ctrl"]:
+                self.logger.info("Cannot save a recording to the Ctrl key.")
+                self.awaiting_save = False
+                state['last_transcribed_text'] = ""
+                state['display_save_prompt'] = False
+            elif state['last_transcribed_text'] and not state['last_transcribed_text'].startswith("Error"):
+                self.recordings[key_name] = state['last_transcribed_text']
+                self.logger.info(f"Saved to '{key_name}': {state['last_transcribed_text']}")
+                self.save_recordings()
+                self.beep(440, 120)
+                self.awaiting_save = False
+                state['last_transcribed_text'] = ""
+                state['display_save_prompt'] = False
+            else:
+                self.logger.info(f"Failed to save: {state['last_transcribed_text']}")
+                self.awaiting_save = False
+                state['last_transcribed_text'] = ""
+                state['display_save_prompt'] = False
+
+    def handle_main_keydown(self, event, state):
+        if event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT] and not self.recording:
+            self.stop_wake_word_listener()
+            self.beep(880, 120)
+            self.recording = True
+            self.awaiting_save = False
+            self.audio_data = []
+            state['recording_thread'] = threading.Thread(target=self.record_audio)
+            state['recording_thread'].start()
+            self.logger.info("Started recording")
+        elif event.key not in [pygame.K_LSHIFT, pygame.K_RSHIFT, pygame.K_ESCAPE, pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT]:
+            key_name = pygame.key.name(event.key)
+            if key_name in self.recordings:
+                self.logger.info(f"Playing '{key_name}': {self.recordings[key_name]}")
+                self.stop_wake_word_listener()
+                self.tts_queue.put(self.recordings[key_name])
+        elif event.key == pygame.K_ESCAPE:
+            self.logger.info("Exiting...")
+            state['running'] = False
+
+    def draw_everything(self, state, prompt_font, instr_font, bg_color, padding):
+        if self.show_settings:
+            self.draw_settings_menu()
+        else:
+            self.draw_background()
+            self.draw_face()
+            self.draw_interference()
+            self.draw_listening_indicator()
+            self.draw_debug_logs()
+            self.draw_pi_status()
+            if state['display_save_prompt'] and state['last_transcribed_text']:
+                self.draw_save_prompt(prompt_font, instr_font, bg_color, padding, state['last_transcribed_text'])
+
+    def main(self):
+        try:
+            running = True
+            state = {
+                'running': True,
+                'recording_thread': None,
+                'last_transcribed_text': "",
+                'display_save_prompt': False,
+            }
+            self.tts_queue.put("Welcome")
+            pi_status_counter = 0
+
+            prompt_font = pygame.font.Font(None, 36)
+            instr_font = pygame.font.Font(None, 36)
+            bg_color = (0, 40, 0)
+            padding = 16
+
+            # Load settings
+            self.load_settings()
+
+            while state['running']:
+                try:
+                    # Process queued actions from other threads
+                    while not self.action_queue.empty():
+                        action = self.action_queue.get()
+                        if action == "question":
+                            if not self.handling_question:
+                                self.handling_question = True
+                                self.stop_wake_word_listener()
+                                threading.Thread(target=self.handle_question_threadsafe, daemon=True).start()
+                        elif action == "wake_word":
+                            self.run_wake_word_listener()
+
+                    # Handle events
+                    events = pygame.event.get([pygame.KEYDOWN, pygame.KEYUP, pygame.TEXTINPUT, pygame.QUIT])
+                    self.process_events(events, state)
+
+                    # Pi status update
+                    if self.is_pi:
+                        pi_status_counter += 1
+                        if pi_status_counter >= 20:
+                            self.undervoltage_warning, self.pi_voltage = self.get_pi_power_status()
+                            pi_status_counter = 0
+
+                    # Drawing
+                    self.draw_everything(state, prompt_font, instr_font, bg_color, padding)
+                    pygame.display.flip()
+                    self.clock.tick(60)
+                except pygame.error as e:
+                    self.logger.error(f"Pygame error: {e}")
+                except Exception as e:
+                    self.logger.error(f"Unexpected error: {e}")
+
+            self.save_recordings()
+            self.shutdown()
+            pygame.quit()
+            sys.exit()
+        except Exception as e:
+            print(f"Fatal error in main: {e}")
+
 if __name__ == "__main__":
     OldTV().main()
