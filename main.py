@@ -491,15 +491,18 @@ class OldTV:
                     self.listening_state = "question"
                     audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
                 except sr.WaitTimeoutError:
-                    self.logger.info("No speech detected. Please try again.")
-                    self.action_queue.put("wake_word")  # <-- Queue the action for main thread
+                    message = "No speech detected. Please try again."
+                    self.logger.info(message)
+                    self.tts_queue.put(message)
+                    #self.action_queue.put("wake_word")  # <-- Queue the action for main thread
                     return
             try:
                 question = recognizer.recognize_google(audio)
                 self.logger.info(f"Recognized question: {question}")
             except Exception as e:
+                message = "Sorry, I could not understand that."
                 self.logger.info(f"Could not recognize question: {e}")
-                self.action_queue.put("wake_word")  # <-- Queue the action for main thread
+                self.tts_queue.put(message)
                 return
 
             try:
