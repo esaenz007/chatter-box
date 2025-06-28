@@ -90,8 +90,8 @@ class OldTV:
                 'Y': 'D', 'Z': 'D', 'ZH': 'D'
             }
             self.syllable_count = 0
-            self.SCREEN_WIDTH = 640
-            self.SCREEN_HEIGHT = 480
+            self.SCREEN_WIDTH = 1300
+            self.SCREEN_HEIGHT = 700
             self.NOISE_DOTS = 500
             self.FONT_SIZE = int(self.SCREEN_HEIGHT * 0.75)
             self.wake_word_thread = None
