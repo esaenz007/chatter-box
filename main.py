@@ -481,6 +481,13 @@ class OldTV:
     def handle_question(self):
         self.logger.info("Entered handle_question")
         try:
+            # Check for internet before proceeding
+            if not getattr(self, "has_internet", True):
+                message = "Sorry, I can't answer questions right now. Please move closer to an internet connection."
+                self.logger.info("No internet: cannot answer question.")
+                self.tts_queue.put(message)
+                return
+
             recognizer = sr.Recognizer()
             mic = sr.Microphone()
             with mic as source:
@@ -494,7 +501,6 @@ class OldTV:
                     message = "No speech detected. Please try again."
                     self.logger.info(message)
                     self.tts_queue.put(message)
-                    #self.action_queue.put("wake_word")  # <-- Queue the action for main thread
                     return
             try:
                 question = recognizer.recognize_google(audio)
