@@ -16,6 +16,7 @@ import vosk
 import math
 import logging
 import subprocess
+import socket  # <-- Added for internet check
 from collections import deque
 
 class OldTV:
@@ -162,8 +163,22 @@ class OldTV:
 
             self.action_queue = queue.Queue()  # <-- Add this line
             self.handling_question = False
+
+            # Internet connectivity
+            self.has_internet = True
+            self._internet_check_counter = 0
+
         except Exception as e:
             print(f"Error in __init__: {e}")
+
+    def check_internet(self, host="8.8.8.8", port=53, timeout=2):
+        """Check internet connectivity by attempting to connect to a DNS server."""
+        try:
+            socket.setdefaulttimeout(timeout)
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+            return True
+        except Exception:
+            return False
 
     def stop_wake_word_listener(self):
         self.logger.info("Entered stop_wake_word_listener")
@@ -688,13 +703,25 @@ class OldTV:
             min_radius = 2
             max_radius = 10
             radius = int(min_radius + (max_radius - min_radius) * pulse)
+            x, y = 60, 60
+
+            if not getattr(self, "has_internet", True):
+                # Draw a red X or "no internet" icon
+                pygame.draw.circle(self.screen, (100, 0, 0), (x, y), max_radius + 2)
+                pygame.draw.line(self.screen, (255, 0, 0), (x - 8, y - 8), (x + 8, y + 8), 4)
+                pygame.draw.line(self.screen, (255, 0, 0), (x - 8, y + 8), (x + 8, y - 8), 4)
+                font = pygame.font.Font(None, 18)
+                txt = font.render("No Internet", True, (255, 0, 0))
+                self.screen.blit(txt, (x - txt.get_width() // 2, y + max_radius + 6))
+                return
+
             if self.listening_state == "wake_word":
                 color = (0, 255, 0)
             elif self.listening_state == "question":
                 color = (255, 140, 0)
             else:
                 return
-            pygame.draw.circle(self.screen, color, (60, 60), radius)
+            pygame.draw.circle(self.screen, color, (x, y), radius)
         except Exception as e:
             self.logger.info(f"Error in draw_listening_indicator: {e}")
 
@@ -939,6 +966,9 @@ class OldTV:
             # Load settings
             self.load_settings()
 
+            # Internet check counter
+            internet_check_counter = 0
+
             while state['running']:
                 try:
                     # Process queued actions from other threads
@@ -962,6 +992,12 @@ class OldTV:
                         if pi_status_counter >= 20:
                             self.undervoltage_warning, self.pi_voltage = self.get_pi_power_status()
                             pi_status_counter = 0
+
+                    # Internet connectivity check every 60 frames (~1 second at 60fps)
+                    internet_check_counter += 1
+                    if internet_check_counter >= 60:
+                        self.has_internet = self.check_internet()
+                        internet_check_counter = 0
 
                     # Drawing
                     self.draw_everything(state, prompt_font, instr_font, bg_color, padding)
