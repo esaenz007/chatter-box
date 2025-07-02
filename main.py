@@ -18,12 +18,111 @@ import logging
 import subprocess
 import socket  # <-- Added for internet check
 from collections import deque
+import abc
 
+class TTSBase(abc.ABC):
+    @abc.abstractmethod
+    def say(self, text):
+        pass
+
+    @abc.abstractmethod
+    def stop(self):
+        pass
+
+    @abc.abstractmethod
+    def is_busy(self):
+        pass
+
+    @abc.abstractmethod
+    def set_voice(self, voice_id):
+        pass
+
+    @abc.abstractmethod
+    def set_rate(self, rate):
+        pass
+
+    @abc.abstractmethod
+    def get_voices(self):
+        pass
+
+    @abc.abstractmethod
+    def get_voice(self):
+        pass
+
+    @abc.abstractmethod
+    def get_rate(self):
+        pass
+
+class Pyttsx3TTS(TTSBase):
+    def __init__(self, on_start=None, on_end=None, on_start_word=None, on_error=None):
+        import pyttsx3
+        self.logger = logging.getLogger("Pyttsx3TTS")
+        self.engine = pyttsx3.init()
+        if on_start:
+            self.engine.connect("started-utterance", on_start)
+        if on_end:
+            self.engine.connect("finished-utterance", on_end)
+        if on_start_word:
+            self.engine.connect("started-word", on_start_word)
+        if on_error:
+            self.engine.connect("error", on_error)
+
+        self.tts_queue = queue.Queue()
+        self.tts_thread = threading.Thread(target=self.tts_worker, daemon=True)
+        self.tts_thread.start()
+
+    def __del__(self):
+        self.tts_queue.put(None)
+        if self.tts_thread.is_alive():
+            self.tts_thread.join(timeout=1)
+        self.logger.info("Pyttsx3TTS instance deleted")
+        
+    def tts_worker(self):
+        self.logger.info("Entered tts_worker")
+        while True:
+            text = self.tts_queue.get()
+            if text is None:
+                break  # Allows for clean shutdown if needed
+            try:
+                self.logger.info(f"TTS Worker: Speaking: {text}")
+                if self.engine.isBusy():
+                    self.engine.stop()
+                self.engine.say(text, "Message Playback")
+                self.engine.runAndWait()
+                self.logger.info("TTS Worker: Done speaking")
+            except Exception as e:
+                self.logger.info(f"TTS Worker error: {e}")
+            
+
+    def say(self, text):
+        self.tts_queue.put(text)
+
+    def stop(self):
+        self.engine.stop()
+
+    def is_busy(self):
+        return self.engine.isBusy()
+
+    def set_voice(self, voice_id):
+        self.engine.setProperty("voice", voice_id)
+
+    def set_rate(self, rate):
+        self.engine.setProperty("rate", rate)
+
+    def get_voices(self):
+        return self.engine.getProperty("voices")
+
+    def get_voice(self):
+        return self.engine.getProperty("voice")
+    
+    def get_rate(self):
+        return self.engine.getProperty("rate")
+    
 class OldTV:
-    SETTINGS_FILE = "settings.json"
-
+    
     def __init__(self):
         try:
+            self.SETTINGS_FILE = "settings.json"
             script_dir = os.path.dirname(os.path.abspath(__file__))
             model_path = os.path.join(script_dir, "models/vosk-model-small-en-us-0.15")
             if not os.path.exists(model_path):
@@ -125,21 +224,21 @@ class OldTV:
             self.interrupt_tts = False
             self.face_queue = queue.Queue()
             try:
-                self.engine = pyttsx3.init()
-                self.engine.connect("finished-utterance", self.on_end)
-                self.engine.connect("started-utterance", self.on_start)
-                self.engine.connect("started-word", self.on_start_word)
-                self.engine.connect("error", self.on_error)
+                self.engine = Pyttsx3TTS(
+                    on_start=self.on_start,
+                    on_end=self.on_end,
+                    on_start_word=self.on_start_word,
+                    on_error=self.on_error
+                )
                 self.logger.info("TTS engine initialized")
                 # Settings: get voices and rate
-                self.settings_voice_list = self.engine.getProperty("voices")
+                self.settings_voice_list = self.engine.get_voices()
                 self.settings_voice_index = 0
-                self.settings_selected_voice = self.engine.getProperty("voice")
-                self.settings_voice_rate = self.engine.getProperty("rate")
+                self.settings_selected_voice = self.engine.get_voice()
+                self.settings_voice_rate = self.engine.get_rate()
             except Exception as e:
                 self.logger.info(f"TTS initialization failed: {e}")
                 sys.exit(1)
-            self.apply_settings()
 
             self.is_talking = False
             self.current_index = 0
@@ -157,9 +256,7 @@ class OldTV:
             self.undervoltage_warning = False
             self.pi_voltage = "Unavailable"
 
-            self.tts_queue = queue.Queue()
-            self.tts_thread = threading.Thread(target=self.tts_worker, daemon=True)
-            self.tts_thread.start()
+            
 
             self.action_queue = queue.Queue()  # <-- Add this line
             self.handling_question = False
@@ -167,7 +264,9 @@ class OldTV:
             # Internet connectivity
             self.has_internet = True
             self._internet_check_counter = 0
-
+            
+            # Load settings
+            self.load_settings()
         except Exception as e:
             print(f"Error in __init__: {e}")
 
@@ -206,6 +305,7 @@ class OldTV:
     def record_audio(self):
         self.logger.info("Entered record_audio")
         try:
+            self.stop_wake_word_listener()
             self.audio_data = []
             stream = None
             try:
@@ -232,6 +332,8 @@ class OldTV:
                     self.logger.info("No audio data recorded")
         except Exception as e:
             self.logger.error(f"Error in record_audio: {e}")
+        finally:
+            self.run_wake_word_listener()  # <-- Only here for TTS!
 
     def speech_to_text(self):
         self.logger.info("Entered speech_to_text")
@@ -266,25 +368,6 @@ class OldTV:
         except Exception as e:
             self.logger.error(f"Error in speech_to_text: {e}")
 
-    def play_message(self, text):
-        self.logger.info("Entered play_message")
-        try:
-            if not text:
-                self.logger.info("No valid text to play")
-                return False
-            try:
-                self.stop_wake_word_listener()
-                self.next_phrase = text
-                pygame.event.pump()
-                self.logger.info(f"Queueing TTS: {text}")
-                self.tts_queue.put(text)
-                return True
-            except Exception as e:
-                self.logger.info(f"Error in play_message: {e}")
-                return False
-        except Exception as e:
-            self.logger.error(f"Error in play_message (outer): {e}")
-
     def start_wake_word_listener(self):
         self.logger.info("Entered start_wake_word_listener")
         try:
@@ -311,7 +394,7 @@ class OldTV:
                                 self.logger.info(f"Recognized: {text}")
                             if "stop" in text:
                                 self.logger.info("Wake word 'stop' detected!")
-                                if self.engine.isBusy():
+                                if self.engine.is_busy():
                                     self.logger.info("TTS engine is busy. Stopping TTS.")
                                     self.engine.stop()
                                 continue
@@ -328,9 +411,9 @@ class OldTV:
         try:
             # Set voice and rate from settings
             if self.settings_voice_list:
-                self.engine.setProperty("voice", self.settings_voice_list[self.settings_voice_index].id)
+                self.engine.set_voice(self.settings_voice_list[self.settings_voice_index].id)
             if self.settings_voice_rate:
-                self.engine.setProperty("rate", self.settings_voice_rate)
+                self.engine.set_rate(self.settings_voice_rate)
             self.logger.info(f"Applied TTS settings: voice={self.settings_voice_list[self.settings_voice_index].name}, rate={self.settings_voice_rate}")
         except Exception as e:
             self.logger.info(f"Error applying settings: {e}")
@@ -394,9 +477,11 @@ class OldTV:
     def handle_question_threadsafe(self):
         self.logger.info("Entered handle_question_threadsafe")
         try:
+            self.stop_wake_word_listener()
             self.handle_question()
         finally:
             self.handling_question = False
+            self.run_wake_word_listener()
 
     def get_syllable_count(self, word: str) -> int:
         self.logger.info(f"Entered get_syllable_count with word: {word}")
@@ -485,7 +570,7 @@ class OldTV:
             if not getattr(self, "has_internet", True):
                 message = "Sorry, I can't answer questions right now. Please move closer to an internet connection."
                 self.logger.info("No internet: cannot answer question.")
-                self.tts_queue.put(message)
+                self.engine.say(message)
                 return
 
             recognizer = sr.Recognizer()
@@ -500,7 +585,7 @@ class OldTV:
                 except sr.WaitTimeoutError:
                     message = "No speech detected. Please try again."
                     self.logger.info(message)
-                    self.tts_queue.put(message)
+                    self.engine.say(message)
                     return
             try:
                 question = recognizer.recognize_google(audio)
@@ -508,7 +593,7 @@ class OldTV:
             except Exception as e:
                 message = "Sorry, I could not understand that."
                 self.logger.info(f"Could not recognize question: {e}")
-                self.tts_queue.put(message)
+                self.engine.say(message)
                 return
 
             try:
@@ -526,11 +611,10 @@ class OldTV:
                 answer = "Sorry, I could not get an answer."
                 self.logger.info(f"OpenAI error: {e}")
 
-            self.tts_queue.put(answer)
+            self.engine.say(answer)
         except Exception as e:
             self.logger.error(f"Error in handle_question: {e}")
         
-
     def is_raspberry_pi(self):
         self.logger.info("Checking if running on Raspberry Pi...")
         try:
@@ -550,30 +634,10 @@ class OldTV:
         except Exception:
             return False, "Unavailable"
 
-    def tts_worker(self):
-        self.logger.info("Entered tts_worker")
-        while True:
-            text = self.tts_queue.get()
-            if text is None:
-                break  # Allows for clean shutdown if needed
-            try:
-                self.logger.info(f"TTS Worker: Speaking: {text}")
-                if self.engine.isBusy():
-                    self.engine.stop()
-                self.engine.say(text, "Message Playback")
-                self.engine.runAndWait()
-                self.logger.info("TTS Worker: Done speaking")
-            except Exception as e:
-                self.logger.info(f"TTS Worker error: {e}")
-            finally:
-                self.run_wake_word_listener()  # <-- Only here for TTS!
-
     def shutdown(self):
         self.logger.info("Shutting down...")
         try:
-            self.logger.info("Shutting down TTS worker...")
-            self.tts_queue.put(None)
-            self.tts_thread.join(timeout=1)
+            self.stop_wake_word_listener()
         except Exception as e:
             self.logger.info(f"Error during shutdown: {e}")
 
@@ -832,6 +896,7 @@ class OldTV:
                     data = json.load(f)
                 self.settings_voice_index = data.get("voice_index", 0)
                 self.settings_voice_rate = data.get("voice_rate", 200)
+                self.apply_settings()
             except Exception as e:
                 self.logger.info(f"Error loading settings: {e}")
 
@@ -882,7 +947,6 @@ class OldTV:
                         self.awaiting_save = False
                         state['display_save_prompt'] = False
                     state['recording_thread'] = None
-                    self.run_wake_word_listener()
 
     def handle_save_prompt_keydown(self, event, state):
         if event.key == pygame.K_ESCAPE:
@@ -891,7 +955,6 @@ class OldTV:
             state['last_transcribed_text'] = ""
             state['display_save_prompt'] = False
         elif event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT]:
-            self.stop_wake_word_listener()
             self.beep(880, 120)
             self.recording = True
             self.awaiting_save = False
@@ -924,7 +987,6 @@ class OldTV:
 
     def handle_main_keydown(self, event, state):
         if event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT] and not self.recording:
-            self.stop_wake_word_listener()
             self.beep(880, 120)
             self.recording = True
             self.awaiting_save = False
@@ -936,8 +998,7 @@ class OldTV:
             key_name = pygame.key.name(event.key)
             if key_name in self.recordings:
                 self.logger.info(f"Playing '{key_name}': {self.recordings[key_name]}")
-                self.stop_wake_word_listener()
-                self.tts_queue.put(self.recordings[key_name])
+                self.engine.say(self.recordings[key_name])
         elif event.key == pygame.K_ESCAPE:
             self.logger.info("Exiting...")
             state['running'] = False
@@ -957,14 +1018,13 @@ class OldTV:
 
     def main(self):
         try:
-            running = True
             state = {
                 'running': True,
                 'recording_thread': None,
                 'last_transcribed_text': "",
                 'display_save_prompt': False,
             }
-            self.tts_queue.put("Welcome")
+            self.engine.say("Welcome")
             pi_status_counter = 0
 
             prompt_font = pygame.font.Font(None, 36)
@@ -972,12 +1032,10 @@ class OldTV:
             bg_color = (0, 40, 0)
             padding = 16
 
-            # Load settings
-            self.load_settings()
-
             # Internet check counter
             internet_check_counter = 0
 
+            self.run_wake_word_listener()
             while state['running']:
                 try:
                     # Process queued actions from other threads
@@ -986,10 +1044,7 @@ class OldTV:
                         if action == "question":
                             if not self.handling_question:
                                 self.handling_question = True
-                                self.stop_wake_word_listener()
                                 threading.Thread(target=self.handle_question_threadsafe, daemon=True).start()
-                        elif action == "wake_word":
-                            self.run_wake_word_listener()
 
                     # Handle events
                     events = pygame.event.get([pygame.KEYDOWN, pygame.KEYUP, pygame.TEXTINPUT, pygame.QUIT])
